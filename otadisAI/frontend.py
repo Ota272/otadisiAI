@@ -18,7 +18,7 @@ import random
 # Конфигурация
 # ─────────────────────────────────────────────
 
-API_BASE = "http://localhost:8000"
+API_BASE = "http://localhost:8001"
 API_KEY = "sk-msgov-2025-demo-key-abc123"
 HEADERS = {"x-api-key": API_KEY}
 
@@ -449,30 +449,32 @@ with tab1:
                 "Туркестанская", "Западно-Казахстанская", "Актюбинская",
             ])
             man_subsidy = st.selectbox("Вид субсидии*", [
-                "Приобретение племенного КРС",
-                "Приобретение племенных овец",
-                "Повышение продуктивности молочного стада",
-                "Улучшение качества мясного производства",
-                "Приобретение баранов-производителей",
+                "Субсидирование племенного КРС",
+                "Субсидирование молочного стада",
+                "Субсидирование овцеводства",
             ])
         with c3:
             man_amount = st.number_input("Сумма заявки (тенге)*", min_value=100_000, max_value=500_000_000,
                                           value=10_000_000, step=500_000)
 
-        st.markdown("#### Показатели эффективности")
+        st.markdown("#### Данные для модели")
         f1, f2, f3, f4 = st.columns(4)
         with f1:
-            man_growth = st.slider("Рост валовой продукции (%)", -30, 80, 15) / 100.0
-            man_pedigree = st.slider("Доля племенного поголовья (%)", 0, 100, 70) / 100.0
+            man_app_date = st.text_input("Дата подачи*", value=datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
+                                         help="Формат: DD.MM.YYYY HH:MM:SS")
+            man_akimat = st.selectbox("Акимат*", ["Акимат г. Алматы", "Акимат г. Астаны", "Акимат Шыркент", "Акимат Тараз"])
         with f2:
-            man_land = st.slider("Использование земли (%)", 0, 100, 80) / 100.0
-            man_survival = st.slider("Выживаемость скота (%)", 50, 100, 90) / 100.0
+            man_direction = st.selectbox("Направление водства*", ["Мясное", "Молочное", "Овцеводство", "Птицеводство"])
+            man_subsidy_name = st.selectbox("Наименование субсидии*", [
+                "Субсидирование племенного КРС",
+                "Субсидирование молочного стада",
+                "Субсидирование овцеводства",
+            ])
         with f3:
-            man_debt = st.slider("Долговая нагрузка (Долг/EBITDA)", 0.0, 5.0, 1.5, 0.1)
-            man_hist = st.slider("Освоение прошлых субсидий (%)", 0, 100, 85) / 100.0
+            man_normativ = st.number_input("Норматив*", min_value=0.0, value=1000000.0, step=100000.0)
+            man_district = st.selectbox("Район хозяйства*", ["Алматинский район", "Шуский район", "Талгарский район", "Карасайский район"])
         with f4:
-            man_years = st.number_input("Лет работы предприятия", 0, 50, 5)
-            man_vet = st.slider("Ветеринарное соответствие (%)", 0, 100, 90) / 100.0
+            man_amount_due = st.number_input("Причитающая сумма*", min_value=0.0, value=float(man_amount), step=100000.0)
 
         st.markdown("#### 📎 Загрузка документов")
 
@@ -505,14 +507,13 @@ with tab1:
                         "region": man_region,
                         "subsidy_type": man_subsidy,
                         "requested_amount": man_amount,
-                        "gross_output_growth": man_growth,
-                        "pedigree_ratio": man_pedigree,
-                        "land_utilization": man_land,
-                        "historical_survival_rate": man_survival,
-                        "debt_load_ratio": man_debt,
-                        "subsidy_utilization_history": man_hist,
-                        "years_in_operation": man_years,
-                        "veterinary_compliance": man_vet,
+                        "application_date": man_app_date,
+                        "akimat": man_akimat,
+                        "direction": man_direction,
+                        "subsidy_name": man_subsidy_name,
+                        "normativ": man_normativ,
+                        "amount_due": man_amount_due,
+                        "district": man_district,
                         "source_system": "manual",
                     }
                     result = _api_post("/api/v1/score", payload)
@@ -828,28 +829,29 @@ with tab3:
                 # Radar chart
                 shap_vals = app.get("shap_values", {})
                 feature_labels = {
-                    "gross_output_growth": "Рост продукции",
-                    "pedigree_ratio": "Племенное поголовье",
-                    "land_utilization": "Земля",
-                    "historical_survival_rate": "Выживаемость",
-                    "debt_load_ratio": "Долг (инверт.)",
-                    "subsidy_utilization_history": "Освоение субсидий",
-                    "years_in_operation": "Стаж",
-                    "veterinary_compliance": "Ветеринария",
+                    "Дата поступления": "Дата подачи",
+                    "Область": "Область",
+                    "Акимат": "Акимат",
+                    "Направление водства": "Направление",
+                    "Наименование субсидирования": "Тип субсидии",
+                    "Норматив": "Норматив",
+                    "Причитающая сумма": "Сумма",
+                    "Район хозяйства": "Район",
                 }
 
                 radar_labels = list(feature_labels.values())
+                # Нормализация для визуализации
                 radar_vals_raw = {
-                    "gross_output_growth": (app.get("gross_output_growth", 0) + 0.3) / 1.3 * 100,
-                    "pedigree_ratio": app.get("pedigree_ratio", 0) * 100,
-                    "land_utilization": app.get("land_utilization", 0) * 100,
-                    "historical_survival_rate": app.get("historical_survival_rate", 0) * 100,
-                    "debt_load_ratio": max(0, (1 - app.get("debt_load_ratio", 0) / 5)) * 100,
-                    "subsidy_utilization_history": app.get("subsidy_utilization_history", 0) * 100,
-                    "years_in_operation": min(app.get("years_in_operation", 0) / 20 * 100, 100),
-                    "veterinary_compliance": app.get("veterinary_compliance", 0) * 100,
+                    "Дата поступления": 50,  # mock
+                    "Область": 70,  # mock
+                    "Акимат": 60,  # mock
+                    "Направление водства": 80,  # mock
+                    "Наименование субсидирования": 75,  # mock
+                    "Норматив": min(app.get("normativ", 1000000) / 5000000 * 100, 100),
+                    "Причитающая сумма": min(app.get("amount_due", 5000000) / 50000000 * 100, 100),
+                    "Район хозяйства": 65,  # mock
                 }
-                radar_vals = [radar_vals_raw[k] for k in feature_labels.keys()]
+                radar_vals = [radar_vals_raw.get(k, 50) for k in feature_labels.keys()]
 
                 fig_radar = go.Figure(go.Scatterpolar(
                     r=radar_vals + [radar_vals[0]],
@@ -859,7 +861,7 @@ with tab3:
                     line=dict(color="#0072CE", width=2.5),
                 ))
                 fig_radar.update_layout(
-                    title="Профиль эффективности (нормализован)",
+                    title="Профиль данных заявки",
                     polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
                     height=320, paper_bgcolor="#ffffff",
                     font=dict(family="Golos Text", size=11),
@@ -885,12 +887,18 @@ with tab3:
                     direction = item.get("direction", "positive")
                     cls = "shap-pos" if direction == "positive" else "shap-neg"
                     sign = "+" if item["shap_value"] > 0 else ""
+                    raw_val = item.get('raw_value', 'N/A')
+                    # Фикс: строки не форматируем как float
+                    try:
+                        val_str = f"{float(raw_val):.3f}" if raw_val != 'N/A' else 'N/A'
+                    except (ValueError, TypeError):
+                        val_str = str(raw_val)
                     shap_html += f"""
                     <div class="shap-item {cls}">
                         <span class="shap-val">{sign}{item['shap_value']:.1f}</span>
                         <div>
                             <div style="font-weight:600;">{item['label']}</div>
-                            <div style="font-size:12px; color:#888;">Значение: {item['raw_value']:.3f}</div>
+                            <div style="font-size:12px; color:#888;">Значение: {val_str}</div>
                         </div>
                     </div>"""
 

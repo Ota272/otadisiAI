@@ -10,13 +10,14 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import Optional
 import random
+import os
 
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sklearn.ensemble import GradientBoostingRegressor
+from catboost import CatBoostClassifier, Pool
 import shap
 
 # ─────────────────────────────────────────────
@@ -64,45 +65,16 @@ class ApplicationFeatures(BaseModel):
     subsidy_type: str = Field(..., description="Вид субсидии")
     requested_amount: float = Field(..., description="Запрашиваемая сумма (тенге)")
 
-    # Признаки эффективности (фичи ML-модели)
-    gross_output_growth: float = Field(
-        ..., ge=-1.0, le=5.0,
-        description="Рост валовой продукции за 2 года (доля, напр. 0.15 = +15%)"
-    )
-    pedigree_ratio: float = Field(
-        ..., ge=0.0, le=1.0,
-        description="Доля племенного поголовья в стаде (0–1)"
-    )
-    land_utilization: float = Field(
-        ..., ge=0.0, le=1.0,
-        description="Коэффициент использования земли (0–1)"
-    )
-    historical_survival_rate: float = Field(
-        ..., ge=0.0, le=1.0,
-        description="Исторический показатель выживаемости скота (0–1)"
-    )
-    debt_load_ratio: float = Field(
-        ..., ge=0.0, le=5.0,
-        description="Долговая нагрузка (соотношение долг/EBITDA)"
-    )
-    subsidy_utilization_history: float = Field(
-        ..., ge=0.0, le=1.0,
-        description="Процент освоения прошлых субсидий (0–1)"
-    )
-    years_in_operation: int = Field(
-        ..., ge=0, le=50,
-        description="Лет в операционной деятельности"
-    )
-    veterinary_compliance: float = Field(
-        ..., ge=0.0, le=1.0,
-        description="Выполнение ветеринарных норм (0–1)"
-    )
+    # Фичи production модели (8 признаков)
+    application_date: str = Field(..., description="Дата поступления (формат: DD.MM.YYYY HH:MM:SS)")
+    akimat: str = Field(..., description="Акимат")
+    direction: str = Field(..., description="Направление водства")
+    subsidy_name: str = Field(..., description="Наименование субсидирования")
+    normativ: float = Field(..., description="Норматив")
+    amount_due: float = Field(..., description="Причитающая сумма")
+    district: str = Field(..., description="Район хозяйства")
 
-    # Метаданные
-    application_date: Optional[str] = Field(
-        default=None,
-        description="Дата подачи (ISO format)"
-    )
+    # Метаданные (не идут в модель)
     source_system: Optional[str] = Field(
         default="manual",
         description="Источник: manual | giss | egov"
@@ -123,7 +95,7 @@ class ScoreResponse(BaseModel):
     shap_values: dict[str, float]
     shap_explanation: list[dict]
     calculated_at: str
-    model_version: str = "GBM-v1.0-mock"
+    model_version: str = "CatBoost-v1.0-production"
 
 
 class DecisionRequest(BaseModel):
@@ -150,85 +122,35 @@ class ApiKeyResponse(BaseModel):
 
 
 # ─────────────────────────────────────────────
-# Mock ML-модель (Gradient Boosting)
+# Загрузка production модели CatBoost
 # ─────────────────────────────────────────────
 
 FEATURE_NAMES = [
-    "gross_output_growth",
-    "pedigree_ratio",
-    "land_utilization",
-    "historical_survival_rate",
-    "debt_load_ratio",
-    "subsidy_utilization_history",
-    "years_in_operation",
-    "veterinary_compliance",
+    "Дата поступления",
+    "Область",
+    "Акимат",
+    "Направление водства",
+    "Наименование субсидирования",
+    "Норматив",
+    "Причитающая сумма",
+    "Район хозяйства",
 ]
 
-# Веса признаков для детерминированного скоринга
-FEATURE_WEIGHTS = {
-    "gross_output_growth":        0.25,
-    "pedigree_ratio":             0.20,
-    "land_utilization":           0.10,
-    "historical_survival_rate":   0.15,
-    "debt_load_ratio":           -0.10,  # Отрицательный: чем больше долг, тем хуже
-    "subsidy_utilization_history":0.12,
-    "years_in_operation":         0.05,
-    "veterinary_compliance":      0.13,
-}
+CAT_FEATURES = ["Дата поступления", "Область", "Акимат", "Направление водства",
+                "Наименование субсидирования", "Район хозяйства"]
+NUM_FEATURES = ["Норматив", "Причитающая сумма"]
 
-# Нормализационные границы для каждого признака
-FEATURE_BOUNDS = {
-    "gross_output_growth":        (-0.5, 1.0),
-    "pedigree_ratio":             (0.0, 1.0),
-    "land_utilization":           (0.0, 1.0),
-    "historical_survival_rate":   (0.0, 1.0),
-    "debt_load_ratio":            (0.0, 5.0),
-    "subsidy_utilization_history":(0.0, 1.0),
-    "years_in_operation":         (0.0, 30.0),
-    "veterinary_compliance":      (0.0, 1.0),
-}
+# Пути к модели
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "production_model.cbm")
 
-# Обучаем mock GBM на синтетических данных
-def _train_mock_model() -> tuple:
-    """Обучает mock GBM и возвращает (model, explainer)."""
-    np.random.seed(42)
-    n_samples = 500
-
-    X = np.column_stack([
-        np.random.uniform(-0.3, 0.8, n_samples),   # gross_output_growth
-        np.random.uniform(0.0, 1.0, n_samples),     # pedigree_ratio
-        np.random.uniform(0.3, 1.0, n_samples),     # land_utilization
-        np.random.uniform(0.7, 1.0, n_samples),     # historical_survival_rate
-        np.random.uniform(0.0, 4.0, n_samples),     # debt_load_ratio
-        np.random.uniform(0.5, 1.0, n_samples),     # subsidy_utilization_history
-        np.random.randint(0, 25, n_samples).astype(float),  # years_in_operation
-        np.random.uniform(0.6, 1.0, n_samples),     # veterinary_compliance
-    ])
-
-    # Целевая переменная: взвешенная сумма + шум
-    y = (
-        X[:, 0] * 25 +
-        X[:, 1] * 20 +
-        X[:, 2] * 10 +
-        X[:, 3] * 15 +
-        (1 - X[:, 4] / 5) * 10 +
-        X[:, 5] * 12 +
-        np.clip(X[:, 6] / 30, 0, 1) * 5 +
-        X[:, 7] * 13 +
-        np.random.normal(0, 2, n_samples)
-    )
-    y = np.clip(y, 0, 100)
-
-    model = GradientBoostingRegressor(
-        n_estimators=100, max_depth=4, random_state=42
-    )
-    model.fit(X, y)
-
+def _load_model() -> tuple:
+    """Загружает production модель и SHAP explainer."""
+    model = CatBoostClassifier()
+    model.load_model(MODEL_PATH)
     explainer = shap.TreeExplainer(model)
     return model, explainer
 
-
-_MODEL, _EXPLAINER = _train_mock_model()
+_MODEL, _EXPLAINER = _load_model()
 
 
 # ─────────────────────────────────────────────
@@ -243,54 +165,67 @@ def _normalize_feature(name: str, value: float) -> float:
 
 def _compute_score(features: ApplicationFeatures) -> tuple[float, dict, list]:
     """
-    Вычисляет скоринговый балл через ML-модель и SHAP.
+    Вычисляет скоринговый балл через production CatBoost модель.
+    Score = вероятность одобрения × 100
 
     Returns:
         (score, shap_values_dict, shap_explanation_list)
     """
-    raw = [
-        features.gross_output_growth,
-        features.pedigree_ratio,
-        features.land_utilization,
-        features.historical_survival_rate,
-        features.debt_load_ratio,
-        features.subsidy_utilization_history,
-        float(features.years_in_operation),
-        features.veterinary_compliance,
-    ]
+    # Подготовка данных для модели
+    input_data = pd.DataFrame([{
+        "Дата поступления": features.application_date,
+        "Область": features.region,
+        "Акимат": features.akimat,
+        "Направление водства": features.direction,
+        "Наименование субсидирования": features.subsidy_name,
+        "Норматив": features.normativ,
+        "Причитающая сумма": features.amount_due,
+        "Район хозяйства": features.district,
+    }])
 
-    X = np.array(raw).reshape(1, -1)
-    score_raw = float(_MODEL.predict(X)[0])
-    score = float(np.clip(score_raw, 0, 100))
+    # Предикт вероятности (класс 1 = одобрено)
+    proba = _MODEL.predict_proba(input_data)[0][1]
+    score = float(np.clip(proba * 100, 0, 100))
 
     # SHAP-объяснения
-    shap_vals = _EXPLAINER.shap_values(X)[0]
+    shap_vals = _EXPLAINER.shap_values(input_data)[0]
     shap_dict = {name: float(shap_vals[i]) for i, name in enumerate(FEATURE_NAMES)}
 
     # Человекочитаемые объяснения
     LABELS = {
-        "gross_output_growth":        "Рост валовой продукции",
-        "pedigree_ratio":             "Доля племенного поголовья",
-        "land_utilization":           "Использование земельного фонда",
-        "historical_survival_rate":   "Выживаемость скота (история)",
-        "debt_load_ratio":            "Долговая нагрузка",
-        "subsidy_utilization_history":"Освоение прошлых субсидий",
-        "years_in_operation":         "Стаж работы предприятия",
-        "veterinary_compliance":      "Ветеринарное соответствие",
+        "Дата поступления":           "Дата подачи заявки",
+        "Область":                    "Область",
+        "Акимат":                     "Акимат",
+        "Направление водства":        "Направление водства",
+        "Наименование субсидирования":"Тип субсидии",
+        "Норматив":                   "Норматив",
+        "Причитающая сумма":          "Сумма к выплате",
+        "Район хозяйства":            "Район",
     }
+
+    raw_vals = [
+        features.application_date,
+        features.region,
+        features.akimat,
+        features.direction,
+        features.subsidy_name,
+        features.normativ,
+        features.amount_due,
+        features.district,
+    ]
 
     explanation = []
     for name, shap_val in sorted(shap_dict.items(), key=lambda x: abs(x[1]), reverse=True):
-        raw_val = raw[FEATURE_NAMES.index(name)]
+        raw_val = raw_vals[FEATURE_NAMES.index(name)]
         direction = "positive" if shap_val > 0 else "negative"
         sign = "+" if shap_val > 0 else ""
         explanation.append({
             "feature": name,
             "label": LABELS[name],
-            "raw_value": round(raw_val, 4),
+            "raw_value": str(raw_val) if isinstance(raw_val, str) else round(raw_val, 2),
             "shap_value": round(shap_val, 2),
             "direction": direction,
-            "text": f"{sign}{shap_val:.1f} балл(ов): {LABELS[name]} = {raw_val:.2f}",
+            "text": f"{sign}{shap_val:.1f}: {LABELS[name]} = {raw_val}",
         })
 
     return score, shap_dict, explanation
@@ -363,8 +298,8 @@ def score_application(
         "shap_values": shap_dict,
         "shap_explanation": explanation,
         "calculated_at": datetime.now().isoformat(),
-        "model_version": "GBM-v1.0-mock",
-        "application_date": features.application_date or datetime.now().strftime("%Y-%m-%d"),
+        "model_version": "CatBoost-v1.0-production",
+        "application_date": features.application_date,
         "source_system": features.source_system or "manual",
     }
 
@@ -399,13 +334,14 @@ def sync_from_giss(api_key: str = Depends(_verify_api_key)):
         "Мангистауская", "Павлодарская", "Северо-Казахстанская", "Туркестанская",
         "Западно-Казахстанская", "Актюбинская",
     ]
-    SUBSIDY_TYPES = [
-        "Приобретение племенного КРС",
-        "Приобретение племенных овец",
-        "Повышение продуктивности молочного стада",
-        "Улучшение качества мясного производства",
-        "Приобретение баранов-производителей",
+    AKIMATS = ["Акимат г. Алматы", "Акимат г. Астаны", "Акимат Шыркент", "Акимат Тараз"]
+    DIRECTIONS = ["Мясное", "Молочное", "Овцеводство", "Птицеводство"]
+    SUBSIDY_NAMES = [
+        "Субсидирование племенного КРС",
+        "Субсидирование молочного стада",
+        "Субсидирование овцеводства",
     ]
+    DISTRICTS = ["Алматинский район", "Шуский район", "Талгарский район", "Карасайский район"]
     COMPANIES = [
         "ТОО «Алтай-Агро»", "ИП Сейткали А.Б.", "ТОО «СтепьПром»",
         "КХ «Береке»", "ТОО «АгроЗерно»", "ИП Жаксыбеков К.М.",
@@ -414,25 +350,24 @@ def sync_from_giss(api_key: str = Depends(_verify_api_key)):
 
     synced = []
     for _ in range(random.randint(3, 6)):
-        growth = random.uniform(-0.3, 0.6)
+        app_date = datetime.now() - timedelta(days=random.randint(0, 30), hours=random.randint(0, 23), minutes=random.randint(0, 59))
+        normativ = random.uniform(500000, 5000000)
+        amount = random.uniform(2_000_000, 50_000_000)
+
         features = ApplicationFeatures(
             bin_iin=f"{random.randint(100000000000, 999999999999)}",
             company_name=random.choice(COMPANIES),
             region=random.choice(REGIONS),
-            subsidy_type=random.choice(SUBSIDY_TYPES),
-            requested_amount=random.uniform(2_000_000, 50_000_000),
-            gross_output_growth=growth,
-            pedigree_ratio=random.uniform(0.2, 1.0),
-            land_utilization=random.uniform(0.4, 1.0),
-            historical_survival_rate=random.uniform(0.6, 1.0),
-            debt_load_ratio=random.uniform(0.0, 3.5),
-            subsidy_utilization_history=random.uniform(0.5, 1.0),
-            years_in_operation=random.randint(1, 20),
-            veterinary_compliance=random.uniform(0.5, 1.0),
+            subsidy_type=random.choice(SUBSIDY_NAMES),
+            requested_amount=amount,
+            application_date=app_date.strftime("%d.%m.%Y %H:%M:%S"),
+            akimat=random.choice(AKIMATS),
+            direction=random.choice(DIRECTIONS),
+            subsidy_name=random.choice(SUBSIDY_NAMES),
+            normativ=normativ,
+            amount_due=amount,
+            district=random.choice(DISTRICTS),
             source_system="giss",
-            application_date=(
-                datetime.now() - timedelta(days=random.randint(0, 30))
-            ).strftime("%Y-%m-%d"),
         )
         result = score_application(features, api_key)
         synced.append(result)

@@ -1,0 +1,15 @@
+# Backend
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.1
+ 
+# ML & Explainability
+scikit-learn==1.5.0
+shap==0.45.0
+numpy==1.26.4
+pandas==2.2.2
+ 
+# Frontend
+streamlit==1.35.0
+plotly==5.22.0
+requests==2.32.2

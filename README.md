@@ -1,5 +1,3 @@
-[29.03.2026 20:57] Insensitive.: # 🌾 SmartAgro Score
-
 > **Merit-based система скоринга субсидий для Министерства сельского хозяйства РК**
 
 **Хакатон Decentrathon 5.0 | AI for Government**

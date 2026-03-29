@@ -35,7 +35,7 @@ git clone <repo-url>
 cd otadisiAI
 
 # 2. Установить зависимости
-pip install -r otadisAI/requirements.txt
+pip install -r requirements.txt
 
 # 3. Запустить Backend (терминал 1)
 cd otadisAI

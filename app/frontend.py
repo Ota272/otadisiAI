@@ -18,7 +18,7 @@ import random
 # Конфигурация
 # ─────────────────────────────────────────────
 
-API_BASE = "http://localhost:8000"
+API_BASE = "http://localhost:8001"
 API_KEY = "sk-msgov-2025-demo-key-abc123"
 HEADERS = {"x-api-key": API_KEY}
 
@@ -292,28 +292,189 @@ if "decisions" not in st.session_state:
     st.session_state.decisions = {}
 if "api_key_display" not in st.session_state:
     st.session_state.api_key_display = API_KEY
+if "current_page" not in st.session_state:
+    st.session_state.current_page = 1
+
+ITEMS_PER_PAGE = 10
 
 # ─────────────────────────────────────────────
 # Вспомогательные функции
 # ─────────────────────────────────────────────
 
+class ValidationErrorInfo:
+    """Информация об ошибке валидации."""
+    field: str
+    message: str
+    valid_values: list[str] | None = None
+
+
+def _parse_validation_error(error_text: str) -> list[dict]:
+    """
+    Парсит ответ API с ошибками валидации.
+    Возвращает список ошибок с полями и сообщениями.
+    """
+    try:
+        # Пытаемся извлечь JSON из текста ошибки
+        import json
+        # Ищем JSON в тексте ошибки
+        start = error_text.find('{')
+        if start == -1:
+            return []
+        json_str = error_text[start:]
+        # Находим закрывающую скобку
+        depth = 0
+        end = start
+        for i, c in enumerate(json_str[start:], start):
+            if c == '{':
+                depth += 1
+            elif c == '}':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        json_str = json_str[:end]
+
+        data = json.loads(json_str)
+        errors = []
+
+        if "detail" in data and isinstance(data["detail"], list):
+            for err in data["detail"]:
+                field = ".".join(str(x) for x in err.get("loc", []))
+                msg = err.get("msg", "")
+
+                # Извлекаем допустимые значения из сообщения
+                valid_values = None
+                if "Допустимые значения:" in msg:
+                    parts = msg.split("Допустимые значения: ")
+                    if len(parts) > 1:
+                        valid_values = [v.strip() for v in parts[1].split(", ")]
+
+                errors.append({
+                    "field": field,
+                    "message": msg,
+                    "valid_values": valid_values,
+                })
+        return errors
+    except Exception:
+        return []
+
+
+def _show_validation_error(error_text: str):
+    """
+    Красиво отображает ошибки валидации.
+    """
+    errors = _parse_validation_error(error_text)
+
+    if not errors:
+        st.error(f"❌ Ошибка валидации: {error_text}")
+        return
+
+    st.error("❌ **Обнаружены ошибки валидации:**")
+
+    # Словарь с человеческими названиями полей
+    FIELD_LABELS = {
+        "body.bin_iin": "БИН/ИИН",
+        "body.company_name": "Наименование предприятия",
+        "body.region": "Область",
+        "body.subsidy_type": "Вид субсидии",
+        "body.requested_amount": "Запрашиваемая сумма",
+        "body.application_date": "Дата подачи заявки",
+        "body.akimat": "Акимат",
+        "body.direction": "Направление водства",
+        "body.subsidy_name": "Наименование субсидии",
+        "body.normativ": "Норматив",
+        "body.amount_due": "Причитающаяся сумма",
+        "body.district": "Район хозяйства",
+        "body.source_system": "Источник",
+        "body": "Заявка",
+    }
+
+    for err in errors:
+        field = err["field"]
+        message = err["message"]
+        valid_values = err.get("valid_values")
+
+        # Получаем человеческое название поля
+        field_label = FIELD_LABELS.get(field, field.replace("body.", ""))
+
+        # Формируем сообщение
+        if valid_values:
+            # Показываем первые 5 допустимых значений
+            show_values = valid_values[:5]
+            more_text = f" и ещё {len(valid_values) - 5}" if len(valid_values) > 5 else ""
+
+            st.markdown(f"""
+            <div style="background: #fff3cd; border: 1px solid #b36200;
+                 border-left: 4px solid #b36200; border-radius: 8px;
+                 padding: 12px 16px; margin-bottom: 10px;">
+                <div style="font-weight: 700; color: #b36200; margin-bottom: 6px;">
+                    ⚠️ {field_label}
+                </div>
+                <div style="color: #664d03; font-size: 14px; margin-bottom: 8px;">
+                    {message.split('.')[0]}.
+                </div>
+                <div style="font-size: 13px; color: #856404;">
+                    <b>Допустимые значения{more_text}:</b><br>
+                    {', '.join(show_values)}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div style="background: #fff3cd; border: 1px solid #b36200;
+                 border-left: 4px solid #b36200; border-radius: 8px;
+                 padding: 12px 16px; margin-bottom: 10px;">
+                <div style="font-weight: 700; color: #b36200;">
+                    ⚠️ {field_label}
+                </div>
+                <div style="color: #664d03; font-size: 14px; margin-top: 4px;">
+                    {message}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+
 def _api_post(endpoint: str, payload: dict) -> dict | None:
     try:
         r = requests.post(f"{API_BASE}{endpoint}", json=payload, headers=HEADERS, timeout=10)
+
+        # Обрабатываем ошибку валидации 422
+        if r.status_code == 422:
+            _show_validation_error(r.text)
+            return None
+
         r.raise_for_status()
         return r.json()
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 422:
+            _show_validation_error(e.response.text)
+        else:
+            st.error(f"❌ Ошибка API: {e}")
+        return None
     except Exception as e:
-        st.error(f"Ошибка API: {e}")
+        st.error(f"❌ Ошибка подключения: {e}")
         return None
 
 
 def _api_get(endpoint: str) -> dict | list | None:
     try:
         r = requests.get(f"{API_BASE}{endpoint}", headers=HEADERS, timeout=10)
+
+        # Обрабатываем ошибку валидации 422
+        if r.status_code == 422:
+            _show_validation_error(r.text)
+            return None
+
         r.raise_for_status()
         return r.json()
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 422:
+            _show_validation_error(e.response.text)
+        else:
+            st.error(f"❌ Ошибка API: {e}")
+        return None
     except Exception as e:
-        st.error(f"Ошибка API: {e}")
+        st.error(f"❌ Ошибка подключения: {e}")
         return None
 
 
@@ -526,38 +687,108 @@ with tab1:
     st.divider()
     st.markdown("#### 📋 Все заявки в очереди")
 
+    # Кнопка обновления и счётчик
+    ref_col, cnt_col = st.columns([1, 4])
+    with ref_col:
+        if st.button("🔄 Обновить", use_container_width=True):
+            _refresh_apps()
+            st.rerun()
+    with cnt_col:
+        st.caption(f"Всего заявок: {len(st.session_state.applications)}")
+
     _refresh_apps()
 
     if not st.session_state.applications:
         st.info("Заявок нет. Нажмите «Синхронизировать с ГИСС» или добавьте вручную.")
     else:
-        for app in st.session_state.applications:
-            cat = app.get("score_category", "yellow")
-            icon = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(cat, "⚪")
-            score = app.get("score", 0)
-            decision_status = st.session_state.decisions.get(app["application_id"], "")
-            dec_badge = ""
-            if decision_status == "approved":
-                dec_badge = "✅ Одобрено"
-            elif decision_status == "rejected":
-                dec_badge = "❌ Отказано"
+        # Фильтр по категории
+        filter_col1, filter_col2, filter_col3 = st.columns([2, 2, 2])
+        with filter_col1:
+            show_green = st.checkbox("🟢 Рекомендовано", value=True)
+        with filter_col2:
+            show_yellow = st.checkbox("🟡 На рассмотрении", value=True)
+        with filter_col3:
+            show_red = st.checkbox("🔴 Не рекомендовано", value=True)
 
-            with st.container():
-                c1, c2, c3, c4, c5 = st.columns([3, 2, 1, 1, 1])
-                with c1:
-                    st.markdown(f"{icon} **{app['company_name']}** `{app['bin_iin']}`")
-                with c2:
-                    st.caption(f"{app['region']} | {app['subsidy_type'][:30]}...")
-                with c3:
-                    st.caption(f"{_fmt_tenge(app['requested_amount'])}")
-                with c4:
-                    st.markdown(f"**{score:.0f}** / 100")
-                with c5:
-                    if dec_badge:
-                        st.caption(dec_badge)
-                    elif st.button("Открыть", key=f"open_{app['application_id']}"):
-                        st.session_state.selected_app_id = app["application_id"]
-                        st.info("Перейдите на вкладку '🔍 Профиль фермера (XAI)'")
+        # Фильтрация
+        filtered_apps = [
+            app for app in st.session_state.applications
+            if (
+                (app.get("score_category") == "green" and show_green) or
+                (app.get("score_category") == "yellow" and show_yellow) or
+                (app.get("score_category") == "red" and show_red)
+            )
+        ]
+
+        if not filtered_apps:
+            st.warning("Нет заявок по выбранным фильтрам.")
+        else:
+            # ═══════════════════════════════════════
+            # ПАГИНАЦИЯ
+            # ═══════════════════════════════════════
+            total_items = len(filtered_apps)
+            total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+
+            # Если текущая страница больше последней — возвращаем на последнюю
+            if st.session_state.current_page > total_pages:
+                st.session_state.current_page = max(1, total_pages)
+
+            # Навигация (стрелки + номер страницы)
+            nav_col1, nav_col2, nav_col3, nav_col4 = st.columns([1, 2, 1, 4])
+
+            with nav_col1:
+                if st.button("⬅️ Назад", disabled=(st.session_state.current_page <= 1), use_container_width=True):
+                    st.session_state.current_page -= 1
+                    st.rerun()
+
+            with nav_col2:
+                st.markdown(f"<div style='text-align:center; padding-top:10px; font-weight:600;'>Страница {st.session_state.current_page} из {total_pages}</div>", unsafe_allow_html=True)
+
+            with nav_col3:
+                if st.button("Вперёд ➡️", disabled=(st.session_state.current_page >= total_pages), use_container_width=True):
+                    st.session_state.current_page += 1
+                    st.rerun()
+
+            with nav_col4:
+                # Индикатор диапазона
+                start_idx = (st.session_state.current_page - 1) * ITEMS_PER_PAGE + 1
+                end_idx = min(st.session_state.current_page * ITEMS_PER_PAGE, total_items)
+                st.caption(f"Показано {start_idx}–{end_idx} из {total_items}")
+
+            # ═══════════════════════════════════════
+            # ОТОБРАЖЕНИЕ ЗАЯВОК (только текущая страница)
+            # ═══════════════════════════════════════
+            start_idx = (st.session_state.current_page - 1) * ITEMS_PER_PAGE
+            end_idx = start_idx + ITEMS_PER_PAGE
+            page_apps = filtered_apps[start_idx:end_idx]
+
+            for app in page_apps:
+                cat = app.get("score_category", "yellow")
+                icon = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(cat, "⚪")
+                score = app.get("score", 0)
+                decision_status = st.session_state.decisions.get(app["application_id"], "")
+                dec_badge = ""
+                if decision_status == "approved":
+                    dec_badge = "✅ Одобрено"
+                elif decision_status == "rejected":
+                    dec_badge = "❌ Отказано"
+
+                with st.container():
+                    c1, c2, c3, c4, c5 = st.columns([3, 2, 1, 1, 1])
+                    with c1:
+                        st.markdown(f"{icon} **{app['company_name'][:30]}** `{app['bin_iin']}`")
+                    with c2:
+                        st.caption(f"{app['region']} | {app['subsidy_type'][:25]}...")
+                    with c3:
+                        st.caption(f"{_fmt_tenge(app['requested_amount'])}")
+                    with c4:
+                        st.markdown(f"**{score:.0f}** / 100")
+                    with c5:
+                        if dec_badge:
+                            st.caption(dec_badge)
+                        elif st.button("🔍", key=f"open_{app['application_id']}", help="Открыть профиль"):
+                            st.session_state.selected_app_id = app["application_id"]
+                            st.info("Перейдите на вкладку '🔍 Профиль фермера (XAI)'")
 
 # ══════════════════════════════════════════════
 # ВКЛАДКА 2: Шорт-лист и бюджет
@@ -1102,7 +1333,7 @@ curl -X POST https://smartagro.msxrk.kz/api/v1/score \\<br>
         <div style="background:#0f1a2e; border:1px solid #1e3060; border-radius:10px;
              padding:18px 20px; margin-bottom:16px;">
             <div style="color:#8ab4e8; font-size:11px; margin-bottom:8px; letter-spacing:0.5px;">
-                АКТИВНЫЙ API КЛЮЧ (МСХ РК)
+                АКТИВНЫЙ API КЛЮЧ (��СХ РК)
             </div>
             <div style="color:#7de3a0; font-family:'Courier New',monospace; font-size:14px;
                  word-break:break-all; line-height:1.8;">
@@ -1114,7 +1345,7 @@ curl -X POST https://smartagro.msxrk.kz/api/v1/score \\<br>
         </div>
         """, unsafe_allow_html=True)
 
-        new_owner = st.text_input("Название организации", placeholder="ГИСС — Региональный офис Алматы")
+        new_owner = st.text_input("Название организации", placeholder="ГИСС — Р��гионал��ный офис Алматы")
         if st.button("🔑 Сгенерировать новый ключ", use_container_width=True):
             if new_owner:
                 result = _api_get(f"/api/v1/keys/generate?owner={new_owner}")

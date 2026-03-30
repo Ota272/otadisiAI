@@ -11,12 +11,13 @@ from datetime import datetime, timedelta
 from typing import Optional
 import random
 import os
+import re
 
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from catboost import CatBoostClassifier, Pool
 import shap
 
@@ -52,6 +53,43 @@ APPLICATIONS_DB: list[dict] = []
 DECISIONS_DB: list[dict] = []
 
 # ─────────────────────────────────────────────
+# Константы для валидации
+# ─────────────────────────────────────────────
+
+DATE_FORMAT = "%d.%m.%Y %H:%M:%S"
+
+VALID_REGIONS = [
+    "Алматинская", "Акмолинская", "Атырауская", "Восточно-Казахстанская",
+    "Жамбылская", "Карагандинская", "Костанайская", "Кызылординская",
+    "Мангистауская", "Павлодарская", "Северо-Казахстанская",
+    "Туркестанская", "Западно-Казахстанская", "Актюбинская",
+]
+
+VALID_AKIMATS = [
+    "Акимат г. Алматы", "Акимат г. Астаны", "Акимат Шыркент", "Акимат Тараз",
+    "Акимат г. Шымкент", "Акимат г. Караганда", "Акимат г. Актобе",
+]
+
+VALID_DIRECTIONS = [
+    "Мясное", "Молочное", "Овцеводство", "Птицеводство",
+    "Свиноводство", "Коневодство", "Верблюдоводство",
+]
+
+VALID_SUBSIDY_NAMES = [
+    "Субсидирование племенного КРС",
+    "Субсидирование молочного стада",
+    "Субсидирование овцеводства",
+    "Субсидирование птицеводства",
+    "Субсидирование кормовых культур",
+]
+
+VALID_DISTRICTS = [
+    "Алматинский район", "Шуский район", "Талгарский район", "Карасайский район",
+    "Енбекшиказахский район", "Илийский район", "Уйгурский район",
+]
+
+
+# ─────────────────────────────────────────────
 # Pydantic схемы данных
 # ─────────────────────────────────────────────
 
@@ -59,14 +97,14 @@ class ApplicationFeatures(BaseModel):
     """Признаки для расчёта скорингового балла."""
 
     # Основные идентификаторы
-    bin_iin: str = Field(..., description="БИН/ИИН предприятия")
+    bin_iin: str = Field(..., description="БИН/ИИН предприятия (12 цифр)")
     company_name: str = Field(..., description="Наименование предприятия")
     region: str = Field(..., description="Область РК")
     subsidy_type: str = Field(..., description="Вид субсидии")
     requested_amount: float = Field(..., description="Запрашиваемая сумма (тенге)")
 
     # Фичи production модели (8 признаков)
-    application_date: str = Field(..., description="Дата поступления (формат: DD.MM.YYYY HH:MM:SS)")
+    application_date: str = Field(..., description=f"Дата поступления (формат: {DATE_FORMAT})")
     akimat: str = Field(..., description="Акимат")
     direction: str = Field(..., description="Направление водства")
     subsidy_name: str = Field(..., description="Наименование субсидирования")
@@ -79,6 +117,176 @@ class ApplicationFeatures(BaseModel):
         default="manual",
         description="Источник: manual | giss | egov"
     )
+
+    # ──────────────────────────────────────────
+    # Валидаторы полей
+    # ──────────────────────────────────────────
+
+    @field_validator("bin_iin")
+    @classmethod
+    def validate_bin_iin(cls, v: str) -> str:
+        """Проверка БИН/ИИН: ровно 12 цифр."""
+        if not v:
+            raise ValueError("БИН/ИИН не может быть пустым")
+        v_clean = v.strip()
+        if not re.match(r"^\d{12}$", v_clean):
+            raise ValueError("БИН/ИИН должен содержать ровно 12 цифр")
+        return v_clean
+
+    @field_validator("company_name")
+    @classmethod
+    def validate_company_name(cls, v: str) -> str:
+        """Проверка наименования: не пустое, макс. 200 символов."""
+        if not v:
+            raise ValueError("Наименование предприятия не может быть пустым")
+        v_clean = v.strip()
+        if len(v_clean) < 2:
+            raise ValueError("Наименование должно содержать минимум 2 символа")
+        if len(v_clean) > 200:
+            raise ValueError("Наименование не может превышать 200 символов")
+        return v_clean
+
+    @field_validator("region")
+    @classmethod
+    def validate_region(cls, v: str) -> str:
+        """Проверка региона: должен быть в списке допустимых."""
+        if not v:
+            raise ValueError("Область не может быть пустой")
+        v_clean = v.strip()
+        if v_clean not in VALID_REGIONS:
+            raise ValueError(
+                f"Недопустимая область. Допустимые значения: {', '.join(VALID_REGIONS)}"
+            )
+        return v_clean
+
+    @field_validator("subsidy_type")
+    @classmethod
+    def validate_subsidy_type(cls, v: str) -> str:
+        """Проверка вида субсидии: не пустое."""
+        if not v:
+            raise ValueError("Вид субсидии не может быть пустым")
+        v_clean = v.strip()
+        if len(v_clean) < 3:
+            raise ValueError("Вид субсидии должен содержать минимум 3 символа")
+        return v_clean
+
+    @field_validator("requested_amount")
+    @classmethod
+    def validate_requested_amount(cls, v: float) -> float:
+        """Проверка суммы: должна быть > 0 и в разумных пределах."""
+        if v <= 0:
+            raise ValueError("Запрашиваемая сумма должна быть больше 0")
+        return v
+
+    @field_validator("application_date")
+    @classmethod
+    def validate_application_date(cls, v: str) -> str:
+        """Проверка даты: формат DD.MM.YYYY HH:MM:SS."""
+        if not v:
+            raise ValueError("Дата поступления не может быть пустой")
+        try:
+            datetime.strptime(v.strip(), DATE_FORMAT)
+        except ValueError:
+            raise ValueError(
+                f"Неверный формат даты. Ожидался формат: {DATE_FORMAT} (например, 15.03.2026 14:30:00)"
+            )
+        return v.strip()
+
+    @field_validator("akimat")
+    @classmethod
+    def validate_akimat(cls, v: str) -> str:
+        """Проверка акимата: должен быть в списке допустимых."""
+        if not v:
+            raise ValueError("Акимат не может быть пустым")
+        v_clean = v.strip()
+        if v_clean not in VALID_AKIMATS:
+            raise ValueError(
+                f"Недопустимый акимат. Допустимые значения: {', '.join(VALID_AKIMATS)}"
+            )
+        return v_clean
+
+    @field_validator("direction")
+    @classmethod
+    def validate_direction(cls, v: str) -> str:
+        """Проверка направления водства: должно быть в списке допустимых."""
+        if not v:
+            raise ValueError("Направление водства не может быть пустым")
+        v_clean = v.strip()
+        if v_clean not in VALID_DIRECTIONS:
+            raise ValueError(
+                f"Недопустимое направление. Допустимые значения: {', '.join(VALID_DIRECTIONS)}"
+            )
+        return v_clean
+
+    @field_validator("subsidy_name")
+    @classmethod
+    def validate_subsidy_name(cls, v: str) -> str:
+        """Проверка наименования субсидии: должно быть в списке допустимых."""
+        if not v:
+            raise ValueError("Наименование субсидии не может быть пустым")
+        v_clean = v.strip()
+        if v_clean not in VALID_SUBSIDY_NAMES:
+            raise ValueError(
+                f"Недопустимое наименование. Допустимые значения: {', '.join(VALID_SUBSIDY_NAMES)}"
+            )
+        return v_clean
+
+    @field_validator("normativ")
+    @classmethod
+    def validate_normativ(cls, v: float) -> float:
+        """Проверка норматива: должен быть >= 0."""
+        if v < 0:
+            raise ValueError("Норматив не может быть отрицательным")
+        if v > 100_000_000:  # 100 млн
+            raise ValueError("Норматив не может превышать 100 000 000")
+        return v
+
+    @field_validator("amount_due")
+    @classmethod
+    def validate_amount_due(cls, v: float) -> float:
+        """Проверка причитающейся суммы: должна быть > 0."""
+        if v <= 0:
+            raise ValueError("Причитающая сумма должна быть больше 0")
+        if v > 1_000_000_000:  # 1 млрд тенге
+            raise ValueError("Причитающая сумма не может превышать 1 000 000 000 тенге")
+        return v
+
+    @field_validator("district")
+    @classmethod
+    def validate_district(cls, v: str) -> str:
+        """Проверка района: должен быть в списке допустимых."""
+        if not v:
+            raise ValueError("Район хозяйства не может быть пустым")
+        v_clean = v.strip()
+        if v_clean not in VALID_DISTRICTS:
+            raise ValueError(
+                f"Недопустимый район. Допустимые значения: {', '.join(VALID_DISTRICTS)}"
+            )
+        return v_clean
+
+    @field_validator("source_system")
+    @classmethod
+    def validate_source_system(cls, v: Optional[str]) -> Optional[str]:
+        """Проверка источника: manual | giss | egov."""
+        if v is None:
+            return "manual"
+        v_clean = v.strip().lower()
+        if v_clean not in ("manual", "giss", "egov"):
+            raise ValueError("Источник должен быть: manual | giss | egov")
+        return v_clean
+
+    @model_validator(mode="after")
+    def validate_amounts_consistency(self) -> "ApplicationFeatures":
+        """
+        Кросс-валидация сумм: причитающаяся сумма не должна превышать запрашиваемую
+        более чем на 50% (защита от аномалий).
+        """
+        if self.amount_due > self.requested_amount * 1.5:
+            raise ValueError(
+                "Причитающая сумма не может превышать запрашиваемую более чем на 50%. "
+                f"Получено: запрашиваемая={self.requested_amount}, причитающаяся={self.amount_due}"
+            )
+        return self
 
 
 class ScoreResponse(BaseModel):
@@ -328,20 +536,11 @@ def sync_from_giss(api_key: str = Depends(_verify_api_key)):
     Имитирует синхронизацию заявок из ГИСС.
     В продакшене: подключение к реальному API ГИСС.
     """
-    REGIONS = [
-        "Алматинская", "Акмолинская", "Атырауская", "Восточно-Казахстанская",
-        "Жамбылская", "Карагандинская", "Костанайская", "Кызылординская",
-        "Мангистауская", "Павлодарская", "Северо-Казахстанская", "Туркестанская",
-        "Западно-Казахстанская", "Актюбинская",
-    ]
-    AKIMATS = ["Акимат г. Алматы", "Акимат г. Астаны", "Акимат Шыркент", "Акимат Тараз"]
-    DIRECTIONS = ["Мясное", "Молочное", "Овцеводство", "Птицеводство"]
-    SUBSIDY_NAMES = [
-        "Субсидирование племенного КРС",
-        "Субсидирование молочного стада",
-        "Субсидирование овцеводства",
-    ]
-    DISTRICTS = ["Алматинский район", "Шуский район", "Талгарский район", "Карасайский район"]
+    REGIONS = VALID_REGIONS
+    AKIMATS = VALID_AKIMATS
+    DIRECTIONS = VALID_DIRECTIONS
+    SUBSIDY_NAMES = VALID_SUBSIDY_NAMES
+    DISTRICTS = VALID_DISTRICTS
     COMPANIES = [
         "ТОО «Алтай-Агро»", "ИП Сейткали А.Б.", "ТОО «СтепьПром»",
         "КХ «Береке»", "ТОО «АгроЗерно»", "ИП Жаксыбеков К.М.",

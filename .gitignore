@@ -1,0 +1,16 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints
+
+# System / IDE
+.DS_Store
+.idea/
+*.swp

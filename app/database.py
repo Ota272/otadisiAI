@@ -10,7 +10,8 @@ from typing import Optional
 from contextlib import contextmanager
 import os
 
-DATABASE_PATH = os.path.join(os.path.dirname(__file__), "smartagro.db")
+# Путь к базе данных в папке data
+DATABASE_PATH = os.path.join(os.path.dirname(__file__), "data", "smartagro.db")
 
 
 @contextmanager

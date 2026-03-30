@@ -21,6 +21,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from catboost import CatBoostClassifier, Pool
 import shap
 
+from app.database import (
+    create_application,
+    get_all_applications,
+    get_application,
+    update_application_decision,
+)
+
 # ─────────────────────────────────────────────
 # Инициализация приложения
 # ─────────────────────────────────────────────
@@ -40,17 +47,15 @@ app.add_middleware(
 )
 
 # ─────────────────────────────────────────────
-# Хранилище данных (in-memory для MVP)
+# API ключи (in-memory для быстрого доступа)
 # ─────────────────────────────────────────────
-API_KEYS: dict[str, dict] = {
+# Основной ключ для демонстрации
+API_KEYS = {
     "sk-msgov-2025-demo-key-abc123": {
         "owner": "МСХ РК — Отдел субсидирования",
         "created": "2025-01-01",
     }
 }
-
-APPLICATIONS_DB: list[dict] = []
-DECISIONS_DB: list[dict] = []
 
 # ─────────────────────────────────────────────
 # Константы для валидации
@@ -507,27 +512,35 @@ def score_application(
         "shap_explanation": explanation,
         "calculated_at": datetime.now().isoformat(),
         "model_version": "CatBoost-v1.0-production",
+        # Поля для БД (8 признаков модели + мета)
         "application_date": features.application_date,
+        "akimat": features.akimat,
+        "direction": features.direction,
+        "subsidy_name": features.subsidy_name,
+        "normativ": features.normativ,
+        "amount_due": features.amount_due,
+        "district": features.district,
         "source_system": features.source_system or "manual",
     }
 
-    APPLICATIONS_DB.append(result)
+    # Сохраняем в базу данных
+    create_application(result)
     return result
 
 
 @app.get("/api/v1/applications", tags=["Applications"])
-def get_all_applications(api_key: str = Depends(_verify_api_key)):
+def get_all_applications_endpoint(api_key: str = Depends(_verify_api_key)):
     """Возвращает все заявки, отсортированные по убыванию балла."""
-    return sorted(APPLICATIONS_DB, key=lambda x: x["score"], reverse=True)
+    return get_all_applications()
 
 
 @app.get("/api/v1/applications/{application_id}", tags=["Applications"])
-def get_application(application_id: str, api_key: str = Depends(_verify_api_key)):
+def get_application_endpoint(application_id: str, api_key: str = Depends(_verify_api_key)):
     """Возвращает детали конкретной заявки."""
-    for app in APPLICATIONS_DB:
-        if app["application_id"] == application_id:
-            return app
-    raise HTTPException(status_code=404, detail="Заявка не найдена")
+    app = get_application(application_id)
+    if app is None:
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+    return app
 
 
 @app.post("/api/v1/giss/sync", tags=["GISS Integration"])
@@ -595,15 +608,14 @@ def record_decision(
         "decided_at": datetime.now().isoformat(),
         "comment": decision_req.comment,
     }
-    DECISIONS_DB.append(record)
 
-    # Обновляем статус в базе заявок
-    for app in APPLICATIONS_DB:
-        if app["application_id"] == decision_req.application_id:
-            app["decision"] = decision_req.decision
-            app["officer_name"] = decision_req.officer_name
-            app["decided_at"] = record["decided_at"]
-            break
+    # Обновляем заявку в БД
+    update_application_decision(
+        record["application_id"],
+        record["decision"],
+        record["officer_name"],
+        record["decided_at"]
+    )
 
     return record
 
@@ -611,21 +623,33 @@ def record_decision(
 @app.get("/api/v1/decisions", tags=["Decisions"])
 def get_decisions(api_key: str = Depends(_verify_api_key)):
     """Возвращает историю решений комиссии."""
-    return DECISIONS_DB
+    # Возвращаем все заявки с решениями
+    apps = get_all_applications()
+    return [
+        {
+            "application_id": app["application_id"],
+            "decision": app.get("decision"),
+            "officer_name": app.get("officer_name"),
+            "decided_at": app.get("decided_at"),
+        }
+        for app in apps
+        if app.get("decision") is not None
+    ]
 
 
 @app.post("/api/v1/keys/generate", response_model=ApiKeyResponse, tags=["API Keys"])
 def generate_api_key(owner: str, api_key: str = Depends(_verify_api_key)):
     """Генерирует новый API ключ для внешней системы."""
     new_key = f"sk-msgov-{secrets.token_hex(12)}"
-    API_KEYS[new_key] = {
-        "owner": owner,
-        "created": datetime.now().strftime("%Y-%m-%d"),
-    }
+    created = datetime.now().strftime("%Y-%m-%d")
+
+    # Добавляем в кэш для быстрой проверки
+    API_KEYS[new_key] = {"owner": owner, "created": created}
+
     return {
         "api_key": new_key,
         "owner": owner,
-        "created": API_KEYS[new_key]["created"],
+        "created": created,
         "permissions": ["score", "read", "sync"],
     }
 

@@ -18,7 +18,7 @@ import random
 # Конфигурация
 # ─────────────────────────────────────────────
 
-API_BASE = "http://localhost:8002"
+API_BASE = "http://localhost:8000"
 API_KEY = "sk-msgov-2025-demo-key-abc123"
 HEADERS = {"x-api-key": API_KEY}
 

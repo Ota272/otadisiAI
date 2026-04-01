@@ -1,0 +1,19 @@
+[
+  "gross_output_growth_yoy",
+  "land_to_livestock_ratio",
+  "historical_survival_rate",
+  "subsidy_dependence_index",
+  "veterinary_compliance",
+  "years_in_operation",
+  "pedigree_ratio",
+  "previous_subsidies_count",
+  "debt_load_ratio",
+  "log_amount",
+  "livestock_count",
+  "direction_code",
+  "is_pedigree",
+  "is_producer",
+  "hour_submitted",
+  "month_submitted",
+  "region_encoded"
+]

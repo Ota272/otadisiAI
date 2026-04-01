@@ -93,7 +93,6 @@ VALID_DISTRICTS = [
     "Енбекшиказахский район", "Илийский район", "Уйгурский район",
 ]
 
-
 # ─────────────────────────────────────────────
 # Pydantic схемы данных
 # ─────────────────────────────────────────────
@@ -293,7 +292,6 @@ class ApplicationFeatures(BaseModel):
             )
         return self
 
-
 class ScoreResponse(BaseModel):
     """Ответ Scoring Engine."""
     application_id: str
@@ -310,14 +308,12 @@ class ScoreResponse(BaseModel):
     calculated_at: str
     model_version: str = "CatBoost-v1.0-production"
 
-
 class DecisionRequest(BaseModel):
     """Решение комиссии по заявке."""
     application_id: str
     decision: str = Field(..., description="approved | rejected")
     comment: Optional[str] = None
     officer_name: str
-
 
 class DecisionResponse(BaseModel):
     application_id: str
@@ -326,13 +322,11 @@ class DecisionResponse(BaseModel):
     decided_at: str
     comment: Optional[str]
 
-
 class ApiKeyResponse(BaseModel):
     api_key: str
     owner: str
     created: str
     permissions: list[str]
-
 
 # ─────────────────────────────────────────────
 # Загрузка production модели CatBoost
@@ -365,7 +359,6 @@ def _load_model() -> tuple:
 
 _MODEL, _EXPLAINER = _load_model()
 
-
 # ─────────────────────────────────────────────
 # Вспомогательные функции
 # ─────────────────────────────────────────────
@@ -375,15 +368,7 @@ def _normalize_feature(name: str, value: float) -> float:
     lo, hi = FEATURE_BOUNDS[name]
     return max(0.0, min(1.0, (value - lo) / (hi - lo + 1e-9)))
 
-
 def _compute_score(features: ApplicationFeatures) -> tuple[float, dict, list]:
-    """
-    Вычисляет скоринговый балл через production CatBoost модель.
-    Score = вероятность одобрения × 100
-
-    Returns:
-        (score, shap_values_dict, shap_explanation_list)
-    """
     # Подготовка данных для модели
     input_data = pd.DataFrame([{
         "Дата поступления": features.application_date,
@@ -400,11 +385,9 @@ def _compute_score(features: ApplicationFeatures) -> tuple[float, dict, list]:
     proba = _MODEL.predict_proba(input_data)[0][1]
     score = float(np.clip(proba * 100, 0, 100))
 
-    # SHAP-объяснения
     shap_vals = _EXPLAINER.shap_values(input_data)[0]
     shap_dict = {name: float(shap_vals[i]) for i, name in enumerate(FEATURE_NAMES)}
 
-    # Человекочитаемые объяснения
     LABELS = {
         "Дата поступления":           "Дата подачи заявки",
         "Область":                    "Область",
@@ -443,7 +426,6 @@ def _compute_score(features: ApplicationFeatures) -> tuple[float, dict, list]:
 
     return score, shap_dict, explanation
 
-
 def _get_category(score: float) -> tuple[str, str]:
     """Возвращает (category_key, recommendation_text)."""
     if score >= 80:
@@ -453,13 +435,11 @@ def _get_category(score: float) -> tuple[str, str]:
     else:
         return "red", "Не рекомендовано (выявлены риски)"
 
-
 def _verify_api_key(x_api_key: str = Header(...)) -> str:
     """Middleware для проверки API ключа."""
     if x_api_key not in API_KEYS:
         raise HTTPException(status_code=401, detail="Неверный API ключ")
     return x_api_key
-
 
 # ─────────────────────────────────────────────
 # Маршруты API
@@ -475,25 +455,15 @@ def root():
         "docs": "/docs",
     }
 
-
 @app.get("/health", tags=["Info"])
 def health_check():
     return {"status": "ok", "timestamp": datetime.now().isoformat()}
-
 
 @app.post("/api/v1/score", response_model=ScoreResponse, tags=["Scoring"])
 def score_application(
     features: ApplicationFeatures,
     api_key: str = Depends(_verify_api_key),
 ):
-    """
-    Рассчитывает скоринговый балл для заявки.
-
-    Принимает данные фермера из ГИСС/eGov, возвращает:
-    - Балл (0–100)
-    - Категорию (green/yellow/red)
-    - SHAP-объяснение
-    """
     app_id = str(uuid.uuid4())[:8].upper()
     score, shap_dict, explanation = _compute_score(features)
     category, recommendation = _get_category(score)
@@ -527,12 +497,10 @@ def score_application(
     create_application(result)
     return result
 
-
 @app.get("/api/v1/applications", tags=["Applications"])
 def get_all_applications_endpoint(api_key: str = Depends(_verify_api_key)):
     """Возвращает все заявки, отсортированные по убыванию балла."""
     return get_all_applications()
-
 
 @app.get("/api/v1/applications/{application_id}", tags=["Applications"])
 def get_application_endpoint(application_id: str, api_key: str = Depends(_verify_api_key)):
@@ -541,7 +509,6 @@ def get_application_endpoint(application_id: str, api_key: str = Depends(_verify
     if app is None:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     return app
-
 
 @app.post("/api/v1/giss/sync", tags=["GISS Integration"])
 def sync_from_giss(api_key: str = Depends(_verify_api_key)):
@@ -591,7 +558,6 @@ def sync_from_giss(api_key: str = Depends(_verify_api_key)):
         "applications": synced,
     }
 
-
 @app.post("/api/v1/decision", response_model=DecisionResponse, tags=["Decisions"])
 def record_decision(
     decision_req: DecisionRequest,
@@ -619,7 +585,6 @@ def record_decision(
 
     return record
 
-
 @app.get("/api/v1/decisions", tags=["Decisions"])
 def get_decisions(api_key: str = Depends(_verify_api_key)):
     """Возвращает историю решений комиссии."""
@@ -636,7 +601,6 @@ def get_decisions(api_key: str = Depends(_verify_api_key)):
         if app.get("decision") is not None
     ]
 
-
 @app.post("/api/v1/keys/generate", response_model=ApiKeyResponse, tags=["API Keys"])
 def generate_api_key(owner: str, api_key: str = Depends(_verify_api_key)):
     """Генерирует новый API ключ для внешней системы."""
@@ -652,7 +616,6 @@ def generate_api_key(owner: str, api_key: str = Depends(_verify_api_key)):
         "created": created,
         "permissions": ["score", "read", "sync"],
     }
-
 
 @app.get("/api/v1/keys", tags=["API Keys"])
 def list_api_keys(api_key: str = Depends(_verify_api_key)):

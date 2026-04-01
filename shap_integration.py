@@ -1,17 +1,3 @@
-"""
-╔══════════════════════════════════════════════════════════════════╗
-║   SmartAgro Score — ШАГ 3: SHAP Explainability Engine           ║
-║   shap_integration.py                                            ║
-╚══════════════════════════════════════════════════════════════════╝
-
-Этот модуль — мозг объяснимости системы.
-Импортируется в main.py (FastAPI) и используется при каждом запросе.
-
-Как использовать:
-    from shap_integration import ScoringEngine
-    engine = ScoringEngine()
-    result = engine.score_farmer(farmer_data_dict)
-"""
 
 import json
 from pathlib import Path
@@ -22,13 +8,8 @@ import numpy as np
 import pandas as pd
 import shap
 
-# ──────────────────────────────────────────────────────────────────
-# КОНФИГУРАЦИЯ
-# ──────────────────────────────────────────────────────────────────
-
 MODELS_DIR = Path("models")
 
-# Человекочитаемые названия фичей (для отображения чиновнику)
 FEATURE_LABELS = {
     "gross_output_growth_yoy":    "Рост валовой продукции (г/г)",
     "land_to_livestock_ratio":    "Обеспеченность пастбищами (Га/голова)",
@@ -49,7 +30,6 @@ FEATURE_LABELS = {
     "region_encoded":             "Регион хозяйства",
 }
 
-# Описание направлений (для понятного текста в объяснении)
 DIRECTION_NAMES = {
     0: "скотоводство (КРС)",
     1: "овцеводство",
@@ -60,45 +40,21 @@ DIRECTION_NAMES = {
     6: "прочее",
 }
 
-
-# ──────────────────────────────────────────────────────────────────
-# КЛАСС SCORING ENGINE
-# ──────────────────────────────────────────────────────────────────
-
 class ScoringEngine:
-    """
-    Главный класс системы скоринга.
-    Загружает модель один раз при старте → быстрые предсказания.
-
-    ПОЧЕМУ КЛАСС, А НЕ ПРОСТО ФУНКЦИИ?
-    Загрузка модели из .joblib занимает ~0.5 секунды.
-    Если бы мы грузили при каждом HTTP-запросе → система была бы медленной.
-    Класс создаётся один раз при старте FastAPI, модель живёт в памяти.
-    """
 
     def __init__(self, models_dir: Path = MODELS_DIR):
-        """Загружаем все артефакты при инициализации."""
         print("🚀 Загружаю SmartAgro Scoring Engine...")
 
-        # Загружаем обученную XGBoost-модель
         self.model = joblib.load(models_dir / "xgb_scorer.joblib")
 
-        # Загружаем StandardScaler (нормализатор)
-        # ВАЖНО: тот же самый scaler что обучался на train-данных!
         self.scaler = joblib.load(models_dir / "scaler.joblib")
 
-        # Загружаем SHAP TreeExplainer
         self.explainer = joblib.load(models_dir / "shap_explainer.joblib")
 
-        # Загружаем список фичей в правильном порядке
         with open(models_dir / "feature_names.json", encoding="utf-8") as f:
             self.feature_names = json.load(f)
 
         print(f"✅ Движок готов: {len(self.feature_names)} фичей, модель загружена")
-
-    # ──────────────────────────────────────────────────────────────
-    # ОСНОВНОЙ МЕТОД: СКОРИНГ ОДНОГО ФЕРМЕРА
-    # ──────────────────────────────────────────────────────────────
 
     def score_farmer(
         self,
@@ -107,29 +63,14 @@ class ScoringEngine:
         *,
         include_shap: bool = True,
     ) -> dict:
-        """
-        Главная функция: принимает данные фермера, возвращает скоринг + объяснение.
 
-        Args:
-            raw_features: словарь с фичами (из Pydantic-модели FastAPI)
-            llm_context: текст, извлечённый из документов через LLM (опционально)
-            include_shap: если False — только предсказание модели (быстрее, для пакетных демо)
-
-        Returns:
-            Полный JSON-ответ со скорингом, зоной и SHAP-объяснениями
-        """
-
-        # ── Шаг 1: Готовим вектор фичей ──────────────────────────
         X = self._prepare_feature_vector(raw_features)
 
-        # ── Шаг 2: Масштабируем ───────────────────────────────────
         X_scaled = self._scale(X)
 
-        # ── Шаг 3: Предсказываем балл ────────────────────────────
         raw_score = float(self.model.predict(X_scaled)[0])
         score = round(float(np.clip(raw_score, 1.0, 100.0)), 1)
 
-        # ── Шаг 4–5: SHAP (можно отключить для массовой генерации демо-заявок)
         if include_shap:
             shap_values = self._compute_shap(X_scaled)
             shap_base = self._get_shap_base_value(X_scaled)
@@ -147,10 +88,8 @@ class ScoringEngine:
             all_shap_values = {}
             explainability = "отключено (демо-пакет)"
 
-        # ── Шаг 6: Определяем зону (Green/Yellow/Red) ────────────
         zone, zone_label, recommendation = self._get_zone(score)
 
-        # ── Шаг 7: Генерируем итоговый вердикт на русском ────────
         verdict_text = self._generate_verdict(
             score, zone, top_positive, top_negative, llm_context
         )
@@ -174,85 +113,34 @@ class ScoringEngine:
             "explainability": explainability,
         }
 
-    # ──────────────────────────────────────────────────────────────
-    # ПОДГОТОВКА ВЕКТОРА ФИЧЕЙ
-    # ──────────────────────────────────────────────────────────────
-
     def _prepare_feature_vector(self, raw: dict) -> pd.DataFrame:
-        """
-        Создаёт DataFrame с фичами в правильном порядке.
-
-        ПОЧЕМУ ВАЖЕН ПОРЯДОК?
-        XGBoost запомнил порядок фичей во время обучения.
-        Если мы подадим их в другом порядке — модель даст неверный результат.
-        Поэтому используем feature_names.json как эталон.
-        """
         row = {}
         for feat in self.feature_names:
-            val = raw.get(feat, 0.0)  # 0.0 как дефолт если фича не передана
+            val = raw.get(feat, 0.0)                                        
             row[feat] = float(val) if val is not None else 0.0
 
         return pd.DataFrame([row], columns=self.feature_names)
 
-    # ──────────────────────────────────────────────────────────────
-    # МАСШТАБИРОВАНИЕ
-    # ──────────────────────────────────────────────────────────────
-
     def _scale(self, X: pd.DataFrame) -> np.ndarray:
-        """
-        Применяем тот же StandardScaler что использовался при обучении.
-
-        КРИТИЧЕСКИ ВАЖНО: мы вызываем только transform(), НЕ fit_transform()!
-        Если вызвать fit_transform() — scaler пересчитает mean/std по одной строке
-        и даст неправильный результат. Только transform() применяет
-        сохранённые параметры обучающей выборки.
-        """
         return self.scaler.transform(X)
 
-    # ──────────────────────────────────────────────────────────────
-    # ВЫЧИСЛЕНИЕ SHAP
-    # ──────────────────────────────────────────────────────────────
-
     def _compute_shap(self, X_scaled: np.ndarray) -> np.ndarray:
-        """
-        Вычисляем SHAP-значения для одной строки данных.
-
-        shap_values[i] = вклад i-й фичи в итоговый балл
-        Положительное значение → фича увеличила балл
-        Отрицательное значение → фича снизила балл
-
-        Сумма всех SHAP ≈ (предсказанный балл - средний балл по обучающим данным)
-        Это называется "аддитивность" — ключевое свойство SHAP.
-        """
         shap_vals = self.explainer.shap_values(X_scaled)
 
-        # shap_vals может быть 2D массивом [n_samples, n_features]
-        # Нам нужна первая строка
         if shap_vals.ndim == 2:
             return shap_vals[0]
         return shap_vals
 
     def _get_shap_base_value(self, X_scaled: np.ndarray) -> float:
-        """
-        Возвращает base value (expected value) SHAP для waterfall-объяснения.
-
-        Для TreeExplainer expected_value может быть:
-        - float
-        - массив (например, для multioutput/классификации)
-        """
         base = getattr(self.explainer, "expected_value", 0.0)
         try:
-            # Если base — массив/список
+
             if isinstance(base, (list, tuple, np.ndarray)):
-                # Берём первый компонент как наиболее типичный кейс
+
                 return float(np.array(base).reshape(-1)[0])
             return float(base)
         except Exception:
             return 0.0
-
-    # ──────────────────────────────────────────────────────────────
-    # ФОРМИРОВАНИЕ ОБЪЯСНЕНИЙ
-    # ──────────────────────────────────────────────────────────────
 
     def _build_explanations(
         self,
@@ -260,17 +148,11 @@ class ScoringEngine:
         raw_features: dict,
         n_factors: int = 3,
     ) -> tuple[list[dict], list[dict]]:
-        """
-        Строит топ-N позитивных и негативных факторов.
-
-        Возвращает понятные JSON-объекты для отображения чиновнику.
-        """
         factors = []
         for i, (name, shap_val) in enumerate(zip(self.feature_names, shap_values)):
             raw_val = raw_features.get(name, 0.0)
             label = FEATURE_LABELS.get(name, name)
 
-            # Генерируем понятное текстовое объяснение
             explanation_text = self._explain_feature(name, raw_val, float(shap_val))
 
             factors.append({
@@ -283,22 +165,14 @@ class ScoringEngine:
                 "impact_text": f"{'+'if shap_val>0 else ''}{shap_val:.1f} баллов: {explanation_text}",
             })
 
-        # Сортируем по абсолютному значению SHAP (самые влиятельные — первые)
         factors.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
 
-        # Разделяем на позитивные и негативные
         positive = [f for f in factors if f["shap_value"] > 0][:n_factors]
         negative = [f for f in factors if f["shap_value"] < 0][:n_factors]
 
         return positive, negative
 
     def _explain_feature(self, name: str, value: float, shap_val: float) -> str:
-        """
-        Генерирует человекочитаемое объяснение для конкретной фичи.
-
-        Это НЕ готовые шаблоны как у напарника.
-        Текст динамически зависит от реального значения фичи и направления SHAP.
-        """
         positive = shap_val > 0
 
         if name == "gross_output_growth_yoy":
@@ -376,12 +250,7 @@ class ScoringEngine:
             direction_word = "положительно" if positive else "отрицательно"
             return f"Показатель '{FEATURE_LABELS.get(name, name)}' влияет {direction_word} на оценку"
 
-    # ──────────────────────────────────────────────────────────────
-    # ОПРЕДЕЛЕНИЕ ЗОНЫ
-    # ──────────────────────────────────────────────────────────────
-
     def _get_zone(self, score: float) -> tuple[str, str, str]:
-        """Возвращает (zone_key, zone_label, recommendation)."""
         if score >= 80:
             return (
                 "green",
@@ -401,10 +270,6 @@ class ScoringEngine:
                 "Не рекомендовано — выявлены существенные риски"
             )
 
-    # ──────────────────────────────────────────────────────────────
-    # ГЕНЕРАЦИЯ ИТОГОВОГО ВЕРДИКТА
-    # ──────────────────────────────────────────────────────────────
-
     def _generate_verdict(
         self,
         score: float,
@@ -413,16 +278,8 @@ class ScoringEngine:
         top_negative: list,
         llm_context: Optional[str],
     ) -> str:
-        """
-        Собирает итоговый текст вердикта из SHAP-факторов.
-
-        Это динамически генерируемый текст на основе реальных данных,
-        а НЕ заранее написанные шаблоны как у напарника.
-        Каждый вердикт уникален для каждого предприятия.
-        """
         verdict_parts = []
 
-        # Введение с зоной
         zone_intros = {
             "green": f"Предприятие получило высокий балл {score:.0f}/100 и рекомендуется к приоритетному рассмотрению.",
             "yellow": f"Предприятие получило балл {score:.0f}/100. Рекомендуется детальное рассмотрение комиссией.",
@@ -430,23 +287,19 @@ class ScoringEngine:
         }
         verdict_parts.append(zone_intros[zone])
 
-        # Позитивные факторы
         if top_positive:
             verdict_parts.append("\n✅ Сильные стороны:")
             for factor in top_positive:
                 verdict_parts.append(f"  • {factor['explanation']}")
 
-        # Негативные факторы
         if top_negative:
             verdict_parts.append("\n⚠️ Факторы риска:")
             for factor in top_negative:
                 verdict_parts.append(f"  • {factor['explanation']}")
 
-        # Контекст из документов (если LLM извлёк)
         if llm_context:
             verdict_parts.append(f"\n📄 Данные из документов:\n  {llm_context}")
 
-        # Обязательный дисклеймер Human-in-the-loop
         verdict_parts.append(
             "\n⚖️ Данная оценка является рекомендацией ИИ-системы. "
             "Окончательное решение принимается уполномоченной комиссией "
@@ -455,34 +308,11 @@ class ScoringEngine:
 
         return "\n".join(verdict_parts)
 
-
-# ──────────────────────────────────────────────────────────────────
-# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Извлечение фичей из текста через LLM
-# ──────────────────────────────────────────────────────────────────
-
 def extract_features_from_documents(documents_text: str, api_key: str) -> dict:
-    """
-    Отправляет текст документов в Claude API и получает структурированные фичи.
-
-    ЧТО ЗДЕСЬ ПРОИСХОДИТ?
-    Фермер загружает PDF-документы (ветсправки, акты на скот, устав ТОО).
-    Мы извлекаем текст из PDF и просим LLM структурировать его в фичи.
-
-    Это решает ГЛАВНУЮ проблему — модель анализирует конкретный документ
-    конкретного предприятия, а не усредняет по таблице!
-
-    Args:
-        documents_text: объединённый текст из загруженных PDF/DOCX
-        api_key: ключ Anthropic API
-
-    Returns:
-        dict с дополнительными фичами для скоринга
-    """
     import google.generativeai as genai
 
     client = genai.configure(api_key=api_key)
 
-    # Системный промпт — инструктируем LLM работать как аналитик МСХ
     system_prompt = """Ты — аналитик Министерства сельского хозяйства РК.
 Твоя задача: извлечь структурированные факты из документов сельхозпредприятия
 для системы скоринга субсидий.
@@ -523,7 +353,6 @@ def extract_features_from_documents(documents_text: str, api_key: str) -> dict:
 
         response_text = message.text.strip()
 
-        # Безопасный парсинг JSON
         import re
         json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
         if json_match:
@@ -531,10 +360,8 @@ def extract_features_from_documents(documents_text: str, api_key: str) -> dict:
         else:
             extracted = json.loads(response_text)
 
-        # Извлекаем llm_summary отдельно (это для verdict текста, не фича)
         llm_summary = extracted.pop("llm_summary", None)
 
-        # Конвертируем bool в float (для совместимости с ML-пайплайном)
         for key in ["has_vet_passport", "vaccination_current", "has_lease_agreement",
                     "has_tax_certificate"]:
             if key in extracted and isinstance(extracted[key], bool):
@@ -559,19 +386,12 @@ def extract_features_from_documents(documents_text: str, api_key: str) -> dict:
             "extraction_status": f"api_error: {e}",
         }
 
-
 def extract_text_from_pdf(pdf_path: str) -> str:
-    """
-    Извлекает текст из PDF. Цепочка движков — многие «плохие» PDF дают текст только в PyMuPDF.
-
-    Порядок: pdfplumber → PyMuPDF (fitz) → pypdf. Без облака, без квот API.
-    """
     max_pages = 40
 
     def _ok(s: str) -> bool:
         return bool(s and len(s.strip()) > 30)
 
-    # 1) pdfplumber (таблицы, аккуратная вёрстка)
     try:
         import pdfplumber
         with pdfplumber.open(pdf_path) as pdf:
@@ -586,9 +406,8 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     except Exception:
         pass
 
-    # 2) PyMuPDF — часто вытягивает текст там, где pdfplumber пустой (разные движки рендеринга)
     try:
-        import fitz  # PyMuPDF
+        import fitz           
         doc = fitz.open(pdf_path)
         try:
             parts = []
@@ -602,7 +421,6 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     except Exception:
         pass
 
-    # 3) pypdf
     try:
         from pypdf import PdfReader
         reader = PdfReader(pdf_path)
@@ -611,13 +429,7 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     except Exception:
         return ""
 
-
-
 def generate_gemini_expert_opinion(app_data: dict, api_key: str) -> str:
-    """
-    Gemini анализирует ВСЕ данные заявки и пишет экспертное заключение на русском.
-    Правила субсидирования — строго из Приказа МСХ РК № 108 от 15.03.2019 (ред. 18.09.2023, введён с 01.01.2024).
-    """
     import google.generativeai as genai
     genai.configure(api_key=api_key)
 

@@ -1,7 +1,3 @@
-"""
-SmartAgro Score — Дашборд Министерства сельского хозяйства РК
-Хакатон Decentrathon 5.0 | AI for Government
-"""
 
 import json
 import time
@@ -17,23 +13,16 @@ from pathlib import Path
 from shap_integration import generate_gemini_expert_opinion
 
 def _load_env_vars():
-    """
-    Гарантированно подхватывает переменные из `.env`.
-    Streamlit не делает это автоматически, а python-dotenv может отсутствовать
-    в интерпретаторе, которым запущен `streamlit run`.
-    """
     env_path = Path(__file__).resolve().with_name(".env")
 
-    # 1) Пытаемся через python-dotenv (если доступен)
     try:
-        from dotenv import load_dotenv  # type: ignore
+        from dotenv import load_dotenv                
         if env_path.exists():
             load_dotenv(dotenv_path=env_path, override=False)
             return str(env_path)
     except Exception:
         pass
 
-    # 2) Fallback без зависимостей: читаем `.env` вручную
     if not env_path.exists():
         return None
 
@@ -51,12 +40,7 @@ def _load_env_vars():
     except Exception:
         return None
 
-
 _load_env_vars()
-
-# ─────────────────────────────────────────────
-# Конфигурация
-# ─────────────────────────────────────────────
 
 API_BASE = os.getenv("SMARTAGRO_API_BASE", "http://localhost:8000")
 API_KEY = os.getenv("SMARTAGRO_API_KEY", "sk-msgov-2025-demo-key-abc123")
@@ -117,10 +101,6 @@ FEATURE_LABELS_SHORT = {
     "Причитающая сумма": "Сумма к выплате",
     "Район хозяйства": "Район",
 }
-
-# ─────────────────────────────────────────────
-# CSS — Государственный стиль
-# ─────────────────────────────────────────────
 
 CSS = """
 <style>
@@ -441,10 +421,6 @@ div.stButton > button:hover { transform: translateY(-1px); box-shadow: 0 4px 12p
 
 st.markdown(CSS, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# Сессионное состояние
-# ─────────────────────────────────────────────
-
 if "applications" not in st.session_state:
     st.session_state.applications = []
 if "selected_app_id" not in st.session_state:
@@ -453,10 +429,6 @@ if "decisions" not in st.session_state:
     st.session_state.decisions = {}
 if "api_key_display" not in st.session_state:
     st.session_state.api_key_display = API_KEY
-
-# ─────────────────────────────────────────────
-# Вспомогательные функции
-# ─────────────────────────────────────────────
 
 def _api_post(
     endpoint: str,
@@ -482,7 +454,6 @@ def _api_post(
         st.error(f"Ошибка API: {e}")
         return None
 
-
 def _api_post_multipart(endpoint: str, data: dict, files: list[tuple[str, tuple[str, bytes, str]]]) -> dict | None:
     try:
         r = requests.post(
@@ -490,8 +461,7 @@ def _api_post_multipart(endpoint: str, data: dict, files: list[tuple[str, tuple[
             data=data,
             files=files,
             headers=HEADERS,
-            # Gemini обрабатывает каждый PDF последовательно: ~15–25 сек/файл.
-            # connect=10 сек, read=300 сек (5 минут — достаточно даже для 10+ файлов)
+
             timeout=(10, 300),
         )
         r.raise_for_status()
@@ -506,10 +476,9 @@ def _api_post_multipart(endpoint: str, data: dict, files: list[tuple[str, tuple[
         st.error(f"Ошибка API: {e}")
         return None
 
-
 def _api_get(endpoint: str) -> dict | list | None:
     try:
-        # /applications может вернуть большой JSON (текст PDF в каждой заявке)
+
         _to = 120 if endpoint.rstrip("/").endswith("applications") else 10
         r = requests.get(f"{API_BASE}{endpoint}", headers=HEADERS, timeout=_to)
         r.raise_for_status()
@@ -518,17 +487,13 @@ def _api_get(endpoint: str) -> dict | list | None:
         st.error(f"Ошибка API: {e}")
         return None
 
-
 def _score_pill(score: float, category: str) -> str:
     cls = {"green": "pill-green", "yellow": "pill-yellow", "red": "pill-red"}.get(category, "")
     return f'<span class="score-pill {cls}">{score:.0f}</span>'
 
-
 def _fmt_tenge(val: float) -> str:
     return f"{val/1_000_000:.2f} млн ₸"
 
-
-# Подписи признаков модели (совпадают с backend / shap_integration)
 FEAT_LABELS_SHAP = {
     "gross_output_growth_yoy": "Рост продукции",
     "pedigree_ratio": "Племенное поголовье",
@@ -549,24 +514,17 @@ FEAT_LABELS_SHAP = {
     "month_submitted": "Месяц подачи",
 }
 
-
 def _shap_max_abs(all_shap: dict) -> float:
     if not all_shap:
         return 1e-9
     return max(abs(float(v)) for v in all_shap.values()) or 1e-9
 
-
 def _shap_to_display_points(shap_val: float, max_abs: float, scale: float = 20.0) -> int:
-    """Масштабирует вклад SHAP к шкале «±N баллов» (самый сильный фактор ≈ ±scale)."""
     if max_abs < 1e-9:
         return 0
     return int(round(scale * float(shap_val) / max_abs))
 
-
 def _normalized_profile_from_raw(raw: dict) -> dict[str, float]:
-    """
-    Нормализация 0–100 для графиков профиля (те же числа, что подаются в модель).
-    """
     if not raw:
         return {}
     g = float(raw.get("gross_output_growth_yoy", 0.0))
@@ -589,7 +547,6 @@ def _normalized_profile_from_raw(raw: dict) -> dict[str, float]:
         "Ветеринария": vet * 100,
     }
 
-
 def _radar_order_labels() -> list[str]:
     return [
         "Рост продукции",
@@ -602,9 +559,7 @@ def _radar_order_labels() -> list[str]:
         "Ветеринария",
     ]
 
-
 def _plot_score_summary_no_waterfall(app: dict, score_ml: float):
-    """Компактная сводка без waterfall: база + итог модели."""
     base = app.get("shap_base_value")
     all_shap = app.get("all_shap_values") or {}
     if base is None and not all_shap:
@@ -621,16 +576,10 @@ def _plot_score_summary_no_waterfall(app: dict, score_ml: float):
         "Документы и заключение LLM могут влиять на отдельный бонус соответствия."
     )
 
-
 def _refresh_apps():
     data = _api_get("/api/v1/applications")
     if data is not None:
         st.session_state.applications = data
-
-
-# ─────────────────────────────────────────────
-# Боковая панель
-# ─────────────────────────────────────────────
 
 with st.sidebar:
     st.markdown("""
@@ -675,10 +624,6 @@ with st.sidebar:
     st.divider()
     st.markdown(f"<span style='font-size:11px; color:#8ab4e8;'>🕐 Последнее обновление: {datetime.now().strftime('%H:%M:%S')}</span>", unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# Шапка
-# ─────────────────────────────────────────────
-
 st.markdown("""
 <div class="gov-header">
     <div>
@@ -689,20 +634,12 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# Вкладки
-# ─────────────────────────────────────────────
-
 tab1, tab2, tab3, tab4 = st.tabs([
     "📥 Поток заявок",
     "📊 Шорт-лист и бюджет",
     "🔍 Профиль фермера (XAI)",
     "🔌 Интеграция API",
 ])
-
-# ══════════════════════════════════════════════
-# ВКЛАДКА 1: Поток заявок
-# ══════════════════════════════════════════════
 
 with tab1:
     st.markdown("### 📥 Поток заявок — API и ручная загрузка")
@@ -733,10 +670,8 @@ with tab1:
 
     st.divider()
 
-    # ── Ручной ввод ──
     with st.expander("✏️ Подать заявку на скоринг", expanded=True):
 
-        # ══ ВАРИАНТ А: Обязательные поля ══════════════════════════════
         st.markdown("### 🅰️ Вариант А — Основные данные")
         st.caption("Обязательно для заполнения. На основе этих данных рассчитывается базовый скоринговый балл.")
 
@@ -774,7 +709,6 @@ with tab1:
 
         st.divider()
 
-        # ══ ВАРИАНТ Б: Опциональные поля ══════════════════════════════
         st.markdown("### 🅱️ Вариант Б — Уточняющие данные *(опционально)*")
         st.caption(
             "Заполнение не обязательно — если оставить «Не знаю / Не указано», "
@@ -813,7 +747,6 @@ with tab1:
 
         st.divider()
 
-        # ══ ДОКУМЕНТЫ: единый drag & drop ═════════════════════════════
         st.markdown("### 📂 Документы заявки")
         st.caption(
             "Перетащите PDF-файлы или нажмите «Browse files». "
@@ -847,7 +780,7 @@ with tab1:
             if not man_bin.strip() or not man_company.strip():
                 st.warning("⚠️ Заполните обязательные поля Варианта А: БИН/ИИН и наименование предприятия.")
             else:
-                # Маппинг Вариант Б → признаки модели (дефолты при «Не знаю»)
+
                 _debt_map = {
                     "Не знаю":                           1.5,
                     "Низкая — Долг/EBITDA < 1.5":        0.8,
@@ -895,7 +828,7 @@ with tab1:
                     "direction":                man_direction,
                     "requested_amount":         man_amount,
                     "source_system":            "manual",
-                    # Вариант Б → числовые признаки модели
+
                     "debt_load_ratio":          _debt_map.get(debt_level, 1.5),
                     "veterinary_compliance":    _vet_map.get(vet_status, 0.85),
                     "gross_output_growth_yoy":  _growth_map.get(growth_choice, 0.05),
@@ -965,7 +898,7 @@ with tab1:
                         )
                     _refresh_apps()
                     st.rerun()
-    # ── Список заявок ──
+
     st.divider()
     st.markdown("#### 📋 Все заявки в очереди")
 
@@ -1002,10 +935,6 @@ with tab1:
                     elif st.button("Открыть", key=f"open_{app['application_id']}"):
                         st.session_state.selected_app_id = app["application_id"]
                         st.info("Перейдите на вкладку '🔍 Профиль фермера (XAI)'")
-
-# ══════════════════════════════════════════════
-# ВКЛАДКА 2: Шорт-лист и бюджет
-# ══════════════════════════════════════════════
 
 with tab2:
     st.markdown("### 📊 Шорт-лист и распределение бюджета")
@@ -1058,7 +987,7 @@ with tab2:
     if not apps_sorted:
         st.info("Заявок нет. Загрузите тестовые заявки или добавьте вручную.")
     else:
-        # Строим таблицу шорт-листа
+
         rows_html = ""
         cumulative = 0.0
         cutoff_drawn = False
@@ -1070,10 +999,8 @@ with tab2:
             amt = app.get("requested_amount", 0)
             decision = st.session_state.decisions.get(app_id, "")
 
-            # Определяем, вписывается ли в бюджет
             would_exceed = (cumulative + amt) > budget
 
-            # Черта бюджета
             if would_exceed and not cutoff_drawn:
                 remaining = budget - cumulative
                 rows_html += f"""
@@ -1138,7 +1065,6 @@ with tab2:
         """
         st.markdown(table_html, unsafe_allow_html=True)
 
-        # Мини-гистограмма баллов
         st.divider()
         scores = [a["score"] for a in apps_sorted]
         fig = go.Figure()
@@ -1166,10 +1092,6 @@ with tab2:
             yaxis=dict(range=[0, 110]),
         )
         st.plotly_chart(fig, use_container_width=True)
-
-# ══════════════════════════════════════════════
-# ВКЛАДКА 3: Профиль фермера (XAI)
-# ══════════════════════════════════════════════
 
 with tab3:
     st.markdown("### 🔍 Профиль фермера — Explainable AI")
@@ -1211,7 +1133,6 @@ with tab3:
             cat_bg = {"green": "#e8f8f0", "yellow": "#fffbea", "red": "#fff0f2"}
             cat_labels = {"green": "✅ СТРОГО РЕКОМЕНДОВАНО", "yellow": "⚠️ ТРЕБУЕТ РАССМОТРЕНИЯ", "red": "🚫 НЕ РЕКОМЕНДОВАНО"}
 
-            # ── Заголовок профиля ──────────────────────────────────
             bonus_str = ""
             if compliance_bonus != 0:
                 sign = "+" if compliance_bonus > 0 else ""
@@ -1240,7 +1161,6 @@ with tab3:
             </div>
             """, unsafe_allow_html=True)
 
-            # ── Экспертное заключение (в UI — LLM) ──────────────────────
             gemini_key = os.getenv("GEMINI_API_KEY", "")
             opinion_key = f"gemini_opinion_{selected_id}"
 
@@ -1373,7 +1293,7 @@ with tab3:
                 st.plotly_chart(fig_radar, use_container_width=True)
 
             with prof_col2:
-                # ── SHAP объяснение (вклад в балл в «условных баллах», шкала ±20) ──
+
                 st.markdown("#### 🧠 Объяснение AI-решения (модель + SHAP)")
                 st.markdown("""
                 <div style="background:#f0f4ff; border:1px solid #dde3ef; border-radius:8px;
@@ -1462,10 +1382,8 @@ with tab3:
                 st.divider()
                 _plot_score_summary_no_waterfall(app, score_ml)
 
-                # ── Финансовая сводка ──
                 st.markdown("#### 💼 Финансовая сводка")
 
-                # Разбивка итогового балла
                 if compliance_bonus != 0:
                     bonus_cls = "pos" if compliance_bonus >= 0 else "neg"
                     bonus_sign = "+" if compliance_bonus >= 0 else ""
@@ -1500,13 +1418,11 @@ with tab3:
                 </table>
                 """, unsafe_allow_html=True)
 
-            # ── Compliance: Проверка соответствия правилам МСХ РК ──
             compliance = app.get("compliance")
             if compliance:
                 st.markdown("---")
                 st.markdown("#### 📋 Проверка соответствия Правилам субсидирования (Приказ МСХ РК № 108)")
 
-                # Статус и бейдж
                 c_status = compliance.get("overall_status", "")
                 c_score_pct = compliance.get("overall_score_pct", 0)
                 c_bonus = compliance.get("compliance_bonus", 0)
@@ -1542,7 +1458,6 @@ with tab3:
                     </div>
                 """, unsafe_allow_html=True)
 
-                # Прогресс-бар выполнения требований
                 bar_color = "#1a7a4a" if c_score_pct >= 85 else ("#e8a800" if c_score_pct >= 60 else "#b5001f")
                 st.markdown(f"""
                     <div style="background:#eee; border-radius:6px; height:8px; margin-bottom:14px;">
@@ -1551,7 +1466,6 @@ with tab3:
                     </div>
                 """, unsafe_allow_html=True)
 
-                # Дисквалификаторы (самое важное — показываем первыми)
                 if c_disq:
                     st.markdown(f"""
                     <div style="background:#2d0010; border:1px solid #8b002a; border-radius:8px;
@@ -1563,8 +1477,7 @@ with tab3:
                     </div>
                     """, unsafe_allow_html=True)
 
-                # Чеклист требований — разбиваем на 2 колонки
-                st.markdown("</div>", unsafe_allow_html=True)  # закрываем compliance-block
+                st.markdown("</div>", unsafe_allow_html=True)                              
 
                 c_col1, c_col2 = st.columns(2)
                 half = (len(c_checks) + 1) // 2
@@ -1599,7 +1512,6 @@ with tab3:
                             </div>
                             """, unsafe_allow_html=True)
 
-                # Итоговая рекомендация compliance
                 c_rec = compliance.get("recommendation", "")
                 if c_rec:
                     st.markdown(f"""
@@ -1609,7 +1521,6 @@ with tab3:
                     </div>
                     """, unsafe_allow_html=True)
 
-                # LLM анализ документов
                 llm_doc = app.get("llm_document_analysis")
                 if llm_doc:
                     st.markdown(f"""
@@ -1629,7 +1540,6 @@ with tab3:
                 </div>
                 """, unsafe_allow_html=True)
 
-            # ── Human-in-the-loop ──
             st.markdown("""
             <div class="hitl-block">
                 <div class="hitl-title">👤 Решение комиссии (Human-in-the-Loop)</div>
@@ -1678,7 +1588,6 @@ with tab3:
                         _refresh_apps()
                         st.rerun()
 
-            # Уже принятое решение
             current_decision = st.session_state.decisions.get(selected_id)
             if current_decision:
                 d_label = "✅ Одобрено" if current_decision == "approved" else "❌ Отказано"
@@ -1689,10 +1598,6 @@ with tab3:
                     {d_label} — Решение зафиксировано: {datetime.now().strftime('%d.%m.%Y %H:%M')}
                 </div>
                 """, unsafe_allow_html=True)
-
-# ══════════════════════════════════════════════
-# ВКЛАДКА 4: Интеграция API
-# ══════════════════════════════════════════════
 
 with tab4:
     st.markdown("### 🔌 Интеграция API — Инструкция для внешних систем")
@@ -1841,10 +1746,6 @@ curl -X POST https://smartagro.msxrk.kz/api/v1/score \\<br>
             Решение комиссии → ГИСС
         </div>
         """, unsafe_allow_html=True)
-
-# ─────────────────────────────────────────────
-# Подвал
-# ─────────────────────────────────────────────
 
 st.divider()
 st.markdown("""

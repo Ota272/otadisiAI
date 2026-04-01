@@ -1,32 +1,18 @@
-# SmartAgro Score — Dependencies v2.0
-# Decentrathon 5.0 | AI for Government
-
-# Backend
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
 pydantic==2.7.1
-
-# ML & Explainability
 scikit-learn==1.5.0
 xgboost==2.0.3
 shap==0.45.0
 numpy==1.26.4
 pandas==2.2.2
-
-# LLM (Document Analysis)
 google-generativeai>=0.7.0
-
-# PDF extraction
 pdfplumber==0.11.0
 pypdf==4.2.0
 PyMuPDF==1.24.14
-
-# Frontend
 streamlit==1.35.0
 plotly==5.22.0
 requests==2.32.2
-
-# Utilities
 joblib==1.4.2
 matplotlib==3.9.0
 python-dotenv==1.2.2

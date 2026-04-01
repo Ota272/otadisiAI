@@ -13,7 +13,6 @@ import os
 # Путь к базе данных в папке data
 DATABASE_PATH = os.path.join(os.path.dirname(__file__), "data", "smartagro.db")
 
-
 @contextmanager
 def get_db_connection():
     """Контекстный менеджер для подключения к БД."""
@@ -24,12 +23,11 @@ def get_db_connection():
     finally:
         conn.close()
 
-
 def init_db():
     """Инициализация базы данных — создание таблиц."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        
+
         # Таблица заявок
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS applications (
@@ -62,20 +60,19 @@ def init_db():
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # Индексы для ускорения поиска
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_applications_score ON applications(score DESC)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_applications_category ON applications(score_category)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_applications_bin_iin ON applications(bin_iin)")
-        
-        conn.commit()
 
+        conn.commit()
 
 def create_application(data: dict) -> dict:
     """Создание новой заявки."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             INSERT INTO applications (
                 application_id, company_name, bin_iin, region, subsidy_type,
@@ -106,10 +103,9 @@ def create_application(data: dict) -> dict:
             data["calculated_at"],
             data.get("model_version", "CatBoost-v1.0-production")
         ))
-        
+
         conn.commit()
         return get_application(data["application_id"])
-
 
 def get_all_applications() -> list:
     """Получение всех заявок, отсортированных по баллу."""
@@ -118,16 +114,15 @@ def get_all_applications() -> list:
         cursor.execute("""
             SELECT * FROM applications ORDER BY score DESC
         """)
-        
+
         applications = []
         for row in cursor.fetchall():
             app = dict(row)
             app["shap_values"] = json.loads(app["shap_values"])
             app["shap_explanation"] = json.loads(app["shap_explanation"])
             applications.append(app)
-        
-        return applications
 
+        return applications
 
 def get_application(application_id: str) -> Optional[dict]:
     """Получение заявки по ID."""
@@ -135,15 +130,14 @@ def get_application(application_id: str) -> Optional[dict]:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM applications WHERE application_id = ?", (application_id,))
         row = cursor.fetchone()
-        
+
         if row is None:
             return None
-        
+
         app = dict(row)
         app["shap_values"] = json.loads(app["shap_values"])
         app["shap_explanation"] = json.loads(app["shap_explanation"])
         return app
-
 
 def update_application_decision(application_id: str, decision: str, officer_name: str, decided_at: str) -> bool:
     """Обновление решения по заявке."""
@@ -154,10 +148,9 @@ def update_application_decision(application_id: str, decision: str, officer_name
             SET decision = ?, officer_name = ?, decided_at = ?, updated_at = CURRENT_TIMESTAMP
             WHERE application_id = ?
         """, (decision, officer_name, decided_at, application_id))
-        
+
         conn.commit()
         return cursor.rowcount > 0
-
 
 def get_application_count() -> int:
     """Получение количества заявок."""
@@ -165,7 +158,6 @@ def get_application_count() -> int:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM applications")
         return cursor.fetchone()[0]
-
 
 # Инициализация БД при импорте
 init_db()

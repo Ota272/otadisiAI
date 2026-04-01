@@ -1,47 +1,15 @@
-"""
-╔══════════════════════════════════════════════════════════════════╗
-║   SmartAgro Score — Модуль проверки соответствия правилам       ║
-║   compliance_checker.py                                          ║
-║                                                                  ║
-║   Источник правил: Приказ МСХ РК № 108 от 15.03.2019            ║
-║   (в ред. приказа № 332 от 18.09.2023, введён с 01.01.2024)     ║
-╚══════════════════════════════════════════════════════════════════╝
-
-Этот модуль делает то, чего нет ни у одного конкурента на хакатоне:
-он АВТОМАТИЧЕСКИ проверяет пакет документов фермера на соответствие
-реальным правилам субсидирования МСХ РК.
-
-Как это работает:
-1. Извлекаем текст из загруженных PDF-документов
-2. Отправляем в Gemini API вместе с КОНКРЕТНЫМИ требованиями из правил
-3. Gemini сверяет документы с каждым требованием и выдаёт чеклист
-4. Результат влияет на итоговый скоринговый балл
-
-║   Как использовать:
-    from compliance_checker import ComplianceChecker
-    checker = ComplianceChecker(gemini_api_key="AIza...")
-    result = checker.check(documents_text, subsidy_type="КРС_маточное")
-"""
 
 import json
 import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-# ──────────────────────────────────────────────────────────────────
-# ПРАВИЛА ИЗ РЕАЛЬНОГО ДОКУМЕНТА МСХ РК
-# Источник: Приложения 2 и 3, Приказ № 108 (ред. 2023)
-# ──────────────────────────────────────────────────────────────────
-
-# Каждое требование — это то что буквально написано в правилах.
-# Мы не придумываем — мы переносим нормативный документ в код.
-
 SUBSIDY_RULES = {
-    # ── КРС: Приобретение племенного маточного поголовья ─────────
+
     "КРС_маточное": {
         "name": "Приобретение племенного маточного поголовья КРС",
         "normative_tenge": {"domestic": 260_000, "cis": 390_000, "foreign": 700_000},
-        "max_subsidy_pct": 50,  # не более 50% от стоимости
+        "max_subsidy_pct": 50,                             
         "requirements": [
             {
                 "id": "R-01",
@@ -129,7 +97,6 @@ SUBSIDY_RULES = {
         ],
     },
 
-    # ── КРС: Приобретение быков-производителей ───────────────────
     "КРС_быки": {
         "name": "Приобретение племенных быков-производителей",
         "normative_tenge": {"domestic": 260_000},
@@ -185,7 +152,6 @@ SUBSIDY_RULES = {
         ],
     },
 
-    # ── Овцы: Племенные бараны-производители ─────────────────────
     "овцы_бараны": {
         "name": "Приобретение племенных баранов-производителей",
         "normative_tenge": {"per_head": 100_000},
@@ -227,7 +193,6 @@ SUBSIDY_RULES = {
         "disqualifiers": ["приобретены по бартеру"],
     },
 
-    # ── Молочное скотоводство: субсидии на молоко ────────────────
     "КРС_молоко": {
         "name": "Удешевление стоимости производства молока",
         "normative_tenge": {"600+": 45, "400+": 30, "50+": 20, "кооператив": 15},
@@ -260,7 +225,6 @@ SUBSIDY_RULES = {
     },
 }
 
-# Общий чеклист документов для всех типов субсидий
 UNIVERSAL_DOCUMENT_CHECKLIST = [
     {
         "id": "U-01",
@@ -282,31 +246,23 @@ UNIVERSAL_DOCUMENT_CHECKLIST = [
     },
 ]
 
-
-# ──────────────────────────────────────────────────────────────────
-# СТРУКТУРЫ ДАННЫХ
-# ──────────────────────────────────────────────────────────────────
-
 @dataclass
 class CheckResult:
-    """Результат проверки одного требования."""
     requirement_id: str
     requirement_text: str
-    status: str          # "ВЫПОЛНЕНО" | "НЕ НАЙДЕНО" | "ЧАСТИЧНО" | "ПРЕДУПРЕЖДЕНИЕ"
-    status_emoji: str    # ✅ | ❌ | ⚠️
-    found_evidence: str  # Что именно найдено в документах
+    status: str                                                                      
+    status_emoji: str                
+    found_evidence: str                                   
     is_critical: bool
-    source: str          # Ссылка на пункт правил
-
+    source: str                                  
 
 @dataclass
 class ComplianceReport:
-    """Полный отчёт о соответствии документов правилам."""
     subsidy_type: str
     subsidy_name: str
-    overall_status: str       # "СООТВЕТСТВУЕТ" | "ЧАСТИЧНО" | "НЕ СООТВЕТСТВУЕТ"
-    overall_score: float      # 0.0 – 1.0 (доля выполненных требований)
-    compliance_bonus: float   # Бонус к ML-скорингу (-15 до +10)
+    overall_status: str                                                          
+    overall_score: float                                               
+    compliance_bonus: float                                     
     checks: list[CheckResult]
     critical_failures: list[str]
     warnings: list[str]
@@ -314,48 +270,19 @@ class ComplianceReport:
     summary_text: str
     recommendation: str
 
-
-# ──────────────────────────────────────────────────────────────────
-# ГЛАВНЫЙ КЛАСС
-# ──────────────────────────────────────────────────────────────────
-
 class ComplianceChecker:
-    """
-    Проверяет документы фермера на соответствие правилам субсидирования МСХ РК.
-
-    Два режима работы:
-    1. LLM-режим (если есть GEMINI_API_KEY): Gemini читает документы
-       и сверяет с требованиями. Наиболее точный.
-    2. Keyword-режим (fallback): простой поиск ключевых слов.
-       Быстро, бесплатно, но менее точно для сложных случаев.
-    """
 
     def __init__(self, gemini_api_key: Optional[str] = None):
-        # В проекте используется Gemini (google-generativeai).
-        # Переименования "Claude/Anthropic" в тексте — исторический артефакт.
+
         self.api_key = gemini_api_key
         self.use_llm = bool(gemini_api_key)
         print(f"ComplianceChecker инициализирован. Режим: {'LLM (Gemini)' if self.use_llm else 'Keyword search'}")
-
-    # ──────────────────────────────────────────────────────────────
-    # ГЛАВНЫЙ МЕТОД
-    # ──────────────────────────────────────────────────────────────
 
     def check(
         self,
         documents_text: str,
         subsidy_type_key: str = "КРС_маточное",
     ) -> ComplianceReport:
-        """
-        Проверяет текст документов на соответствие требованиям.
-
-        Args:
-            documents_text: объединённый текст из всех загруженных документов
-            subsidy_type_key: ключ типа субсидии из SUBSIDY_RULES
-
-        Returns:
-            ComplianceReport с детальным чеклистом
-        """
         rules = SUBSIDY_RULES.get(subsidy_type_key, SUBSIDY_RULES["КРС_маточное"])
 
         if self.use_llm:
@@ -363,35 +290,18 @@ class ComplianceChecker:
         else:
             checks = self._check_with_keywords(documents_text, rules)
 
-        # Добавляем универсальный чеклист
         universal_checks = self._check_universal(documents_text)
         checks = universal_checks + checks
 
-        # Ищем дисквалифицирующие условия
         disqualifiers = self._find_disqualifiers(documents_text, rules)
 
-        # Считаем итоги
         return self._build_report(rules, checks, disqualifiers)
 
-    # ──────────────────────────────────────────────────────────────
-    # LLM-РЕЖИМ: Используем Gemini для умной проверки
-    # ──────────────────────────────────────────────────────────────
-
     def _check_with_llm(self, documents_text: str, rules: dict) -> list[CheckResult]:
-        """
-        Отправляет документы в Gemini API с подробным промптом.
-
-        ПОЧЕМУ ЭТО ЛУЧШЕ KEYWORD SEARCH?
-        Keyword search ищет буквально "ветеринар" в тексте.
-        Gemini понимает: "Справка об эпизоотическом благополучии хозяйства
-        от 12.02.2025" = это и есть справка о ветеринарном благополучии.
-        Gemini понимает смысл, а не просто буквы.
-        """
         import google.generativeai as genai
 
         genai.configure(api_key=self.api_key)
 
-        # Формируем список требований для промпта
         requirements_text = "\n".join([
             f"{r['id']}. [{r['source']}] {r['text']} (КРИТИЧНО: {'ДА' if r['critical'] else 'НЕТ'})"
             for r in rules["requirements"]
@@ -446,14 +356,12 @@ class ComplianceChecker:
             message = model.generate_content(user_message)
             response_text = message.text.strip()
 
-            # Безопасный парсинг JSON
             json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
             if json_match:
                 llm_result = json.loads(json_match.group())
             else:
                 llm_result = json.loads(response_text)
 
-            # Конвертируем ответ LLM в CheckResult объекты
             llm_checks = {c["id"]: c for c in llm_result.get("checks", [])}
 
             results = []
@@ -478,15 +386,7 @@ class ComplianceChecker:
             print(f"⚠️ LLM недоступен ({e}), переключаюсь на keyword-режим")
             return self._check_with_keywords(documents_text, rules)
 
-    # ──────────────────────────────────────────────────────────────
-    # KEYWORD-РЕЖИМ: Простой поиск по ключевым словам (fallback)
-    # ──────────────────────────────────────────────────────────────
-
     def _check_with_keywords(self, documents_text: str, rules: dict) -> list[CheckResult]:
-        """
-        Проверяет наличие ключевых слов из каждого требования.
-        Работает без API, но менее умный чем LLM.
-        """
         text_lower = documents_text.lower()
         results = []
 
@@ -516,7 +416,6 @@ class ComplianceChecker:
         return results
 
     def _check_universal(self, documents_text: str) -> list[CheckResult]:
-        """Проверяет универсальные требования для всех субсидий."""
         text_lower = documents_text.lower()
         results = []
         for req in UNIVERSAL_DOCUMENT_CHECKLIST:
@@ -535,7 +434,6 @@ class ComplianceChecker:
         return results
 
     def _find_disqualifiers(self, documents_text: str, rules: dict) -> list[str]:
-        """Ищет дисквалифицирующие условия (если найдены → субсидия невозможна)."""
         text_lower = documents_text.lower()
         found = []
         for disq in rules.get("disqualifiers", []):
@@ -543,17 +441,12 @@ class ComplianceChecker:
                 found.append(disq)
         return found
 
-    # ──────────────────────────────────────────────────────────────
-    # ПОСТРОЕНИЕ ИТОГОВОГО ОТЧЁТА
-    # ──────────────────────────────────────────────────────────────
-
     def _build_report(
         self,
         rules: dict,
         checks: list[CheckResult],
         disqualifiers: list[str],
     ) -> ComplianceReport:
-        """Агрегирует результаты проверок в итоговый отчёт."""
 
         critical_failures = [
             c.requirement_text for c in checks
@@ -564,13 +457,11 @@ class ComplianceChecker:
             if c.status in ("ЧАСТИЧНО", "ПРЕДУПРЕЖДЕНИЕ")
         ]
 
-        # Считаем долю выполненных требований
         total = len(checks)
         done = sum(1 for c in checks if c.status == "ВЫПОЛНЕНО")
         partial = sum(1 for c in checks if c.status == "ЧАСТИЧНО")
         overall_score = (done + partial * 0.5) / total if total > 0 else 0.0
 
-        # Итоговый статус
         if disqualifiers:
             overall_status = "ДИСКВАЛИФИКАЦИЯ"
         elif critical_failures:
@@ -582,22 +473,18 @@ class ComplianceChecker:
         else:
             overall_status = "НЕ СООТВЕТСТВУЕТ"
 
-        # Бонус/штраф к ML-скорингу
-        # Логика: полное соответствие → +8 баллов к скорингу
-        # Критические нарушения → -15 баллов
         if overall_status == "ДИСКВАЛИФИКАЦИЯ":
             compliance_bonus = -20.0
         elif overall_status == "НЕ СООТВЕТСТВУЕТ":
             bonus_base = -15.0
             compliance_bonus = bonus_base + (overall_score * 5)
         elif overall_status == "ЧАСТИЧНО":
-            compliance_bonus = (overall_score - 0.6) / 0.25 * 10 - 5  # -5 to +5
-        else:  # СООТВЕТСТВУЕТ
-            compliance_bonus = (overall_score - 0.85) / 0.15 * 8  # 0 to +8
+            compliance_bonus = (overall_score - 0.6) / 0.25 * 10 - 5            
+        else:                 
+            compliance_bonus = (overall_score - 0.85) / 0.15 * 8           
 
         compliance_bonus = round(max(-20.0, min(10.0, compliance_bonus)), 1)
 
-        # Текст рекомендации
         if overall_status == "ДИСКВАЛИФИКАЦИЯ":
             recommendation = (
                 "❌ ДИСКВАЛИФИКАЦИЯ: Обнаружены условия, исключающие право на субсидию. "
@@ -619,7 +506,6 @@ class ComplianceChecker:
                 f"Выполнено {done}/{total} требований."
             )
 
-        # Итоговый текст для вердикта
         summary_lines = [
             f"📋 Проверка соответствия: {rules['name']}",
             f"Статус: {overall_status} | Выполнено: {done}/{total} требований ({overall_score*100:.0f}%)",
@@ -658,16 +544,7 @@ class ComplianceChecker:
             "ДИСКВАЛИФИКАЦИЯ":"🚫",
         }.get(status, "❓")
 
-
-# ──────────────────────────────────────────────────────────────────
-# УТИЛИТА: Определяем тип субсидии по тексту заявки
-# ──────────────────────────────────────────────────────────────────
-
 def detect_subsidy_type(subsidy_name: str, direction: str) -> str:
-    """
-    Определяет ключ типа субсидии по тексту заявки.
-    Нужно чтобы применить правильный чеклист.
-    """
     text = (subsidy_name + " " + direction).lower()
 
     if "быка" in text or "быков" in text or "бык-производитель" in text:
@@ -679,12 +556,7 @@ def detect_subsidy_type(subsidy_name: str, direction: str) -> str:
     elif "баран" in text or "баранов-производит" in text:
         return "овцы_бараны"
     else:
-        return "КРС_маточное"  # дефолт
-
-
-# ──────────────────────────────────────────────────────────────────
-# ФУНКЦИЯ ДЛЯ ИНТЕГРАЦИИ В FASTAPI
-# ──────────────────────────────────────────────────────────────────
+        return "КРС_маточное"          
 
 def run_compliance_check(
     documents_text: str,
@@ -692,16 +564,10 @@ def run_compliance_check(
     direction: str,
     gemini_api_key: Optional[str] = None,
 ) -> dict:
-    """
-    Готовая функция для вызова из main.py FastAPI.
-    ...
-    """
     subsidy_type_key = detect_subsidy_type(subsidy_name, direction)
     checker = ComplianceChecker(gemini_api_key=gemini_api_key)
     report = checker.check(documents_text, subsidy_type_key)
-    
-    # doc_completeness: доля проверок со статусом «found» / «partial»
-    # Используется в main.py для расчёта адаптивного веса документного модуля
+
     total_checks   = len(report.checks)
     found_checks   = sum(1 for c in report.checks if c.status in ("found", "partial"))
     doc_completeness = round(found_checks / total_checks, 3) if total_checks > 0 else 0.0

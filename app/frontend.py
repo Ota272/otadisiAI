@@ -346,7 +346,6 @@ class ValidationErrorInfo:
     message: str
     valid_values: list[str] | None = None
 
-
 def _parse_validation_error(error_text: str) -> list[dict]:
     """
     Парсит ответ API с ошибками валидации.
@@ -396,7 +395,6 @@ def _parse_validation_error(error_text: str) -> list[dict]:
         return errors
     except Exception:
         return []
-
 
 def _show_validation_error(error_text: str):
     """
@@ -472,7 +470,6 @@ def _show_validation_error(error_text: str):
             </div>
             """, unsafe_allow_html=True)
 
-
 def _api_post(endpoint: str, payload: dict) -> dict | None:
     try:
         r = requests.post(f"{API_BASE}{endpoint}", json=payload, headers=HEADERS, timeout=10)
@@ -493,7 +490,6 @@ def _api_post(endpoint: str, payload: dict) -> dict | None:
     except Exception as e:
         st.error(f"Ошибка подключения: {e}")
         return None
-
 
 def _api_get(endpoint: str) -> dict | list | None:
     try:
@@ -516,21 +512,17 @@ def _api_get(endpoint: str) -> dict | list | None:
         st.error(f"Ошибка подключения: {e}")
         return None
 
-
 def _score_pill(score: float, category: str) -> str:
     cls = {"green": "pill-green", "yellow": "pill-yellow", "red": "pill-red"}.get(category, "")
     return f'<span class="score-pill {cls}">{score:.0f}</span>'
 
-
 def _fmt_tenge(val: float) -> str:
     return f"{val/1_000_000:.2f} млн ₸"
-
 
 def _refresh_apps():
     data = _api_get("/api/v1/applications")
     if data is not None:
         st.session_state.applications = data
-
 
 # ─────────────────────────────────────────────
 # Боковая панель
@@ -768,7 +760,6 @@ with tab1:
             total_items = len(filtered_apps)
             total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
 
-            # Если текущая страница больше последней — возвращаем на последнюю
             if st.session_state.current_page > total_pages:
                 st.session_state.current_page = max(1, total_pages)
 
@@ -1141,7 +1132,7 @@ with tab3:
                 st.plotly_chart(fig_radar, use_container_width=True)
 
             with prof_col2:
-                # ── SHAP объяснение ──
+
                 st.markdown("Объяснение AI-решения (SHAP)")
                 st.markdown(f"""
                 <div style="background:#f1f5f9; border:1px solid #e2e8f0; border-radius:6px;

@@ -1,6 +1,3 @@
-"""
-SQLite-хранилище заявок: только «реальные» записи (не демо с кнопки тестовых заявок).
-"""
 
 from __future__ import annotations
 
@@ -11,7 +8,6 @@ from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DB_PATH = DATA_DIR / "applications.sqlite"
-
 
 def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -30,9 +26,7 @@ def init_db() -> None:
     finally:
         conn.close()
 
-
 def upsert_application(record: dict) -> None:
-    """Сохраняет или обновляет заявку. Демо-заявки (is_demo=True) не пишутся."""
     if record.get("is_demo"):
         return
     aid = record.get("application_id")
@@ -52,7 +46,6 @@ def upsert_application(record: dict) -> None:
         conn.commit()
     finally:
         conn.close()
-
 
 def load_all_applications() -> list[dict]:
     if not DB_PATH.exists():

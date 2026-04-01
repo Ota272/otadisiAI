@@ -1,14 +1,3 @@
-"""
-╔══════════════════════════════════════════════════════════════════╗
-║   SmartAgro Score — ШАГ 4: FastAPI Backend (Production)         ║
-║   main.py                                                         ║
-╚══════════════════════════════════════════════════════════════════╝
-
-Запуск:
-    uvicorn main:app --reload --port 8000
-
-Swagger UI: http://localhost:8000/docs
-"""
 
 import io
 import os
@@ -20,23 +9,16 @@ from pathlib import Path
 from typing import Optional
 
 def _load_env_vars():
-    """
-    Гарантированно подхватывает переменные из `.env`.
-    uvicorn/FastAPI не делают это автоматически, а python-dotenv может отсутствовать
-    в интерпретаторе, которым запущен `uvicorn`.
-    """
     env_path = Path(__file__).resolve().with_name(".env")
 
-    # 1) Пытаемся через python-dotenv (если доступен)
     try:
-        from dotenv import load_dotenv  # type: ignore
+        from dotenv import load_dotenv                
         if env_path.exists():
             load_dotenv(dotenv_path=env_path, override=False)
             return str(env_path)
     except Exception:
         pass
 
-    # 2) Fallback без зависимостей: читаем `.env` вручную
     if not env_path.exists():
         return None
 
@@ -54,7 +36,6 @@ def _load_env_vars():
     except Exception:
         return None
 
-
 _ENV_LOADED_FROM = _load_env_vars()
 
 import numpy as np
@@ -66,10 +47,6 @@ from pydantic import BaseModel, Field
 from shap_integration import ScoringEngine, extract_features_from_documents, extract_text_from_pdf
 from compliance_checker import run_compliance_check, detect_subsidy_type
 import applications_store
-
-# ──────────────────────────────────────────────────────────────────
-# ИНИЦИАЛИЗАЦИЯ
-# ──────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="SmartAgro Score API",
@@ -93,15 +70,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ──────────────────────────────────────────────────────────────────
-# ЗАГРУЗКА МОДЕЛИ ПРИ СТАРТЕ СЕРВЕРА
-# ──────────────────────────────────────────────────────────────────
-# Объяснение: @app.on_event("startup") — код выполняется ОДИН РАЗ
-# когда FastAPI запускается. Модель загружается в RAM и остаётся там.
-# При каждом HTTP-запросе мы используем уже загруженную модель.
-
 _engine: Optional[ScoringEngine] = None
-
 
 @app.on_event("startup")
 async def startup_event():
@@ -119,7 +88,6 @@ async def startup_event():
         _engine = ScoringEngine(models_dir)
         print("SmartAgro Scoring Engine загружен и готов к работе")
 
-
 def get_engine() -> ScoringEngine:
     if _engine is None:
         raise HTTPException(
@@ -128,52 +96,31 @@ def get_engine() -> ScoringEngine:
         )
     return _engine
 
-
-# ──────────────────────────────────────────────────────────────────
-# API КЛЮЧИ
-# ──────────────────────────────────────────────────────────────────
-
 VALID_API_KEYS = {
     "sk-msgov-2025-demo-key-abc123": "МСХ РК — Отдел субсидирования",
     "sk-msgov-giss-integration-xyz": "Сервис тестовой нагрузки API",
 }
-
 
 def verify_api_key(x_api_key: str = Header(...)):
     if x_api_key not in VALID_API_KEYS:
         raise HTTPException(status_code=401, detail="Неверный API ключ")
     return x_api_key
 
-
-# ──────────────────────────────────────────────────────────────────
-# ХРАНИЛИЩЕ
-# ──────────────────────────────────────────────────────────────────
-
 _applications_db: list[dict] = []
 _decisions_db: list[dict] = []
 
-
 def _register_application(record: dict, *, persist: bool | None = None) -> None:
-    """В память — всегда; в SQLite — только не демо (если persist не переопределён)."""
     if persist is None:
         persist = not record.get("is_demo", False)
     _applications_db.append(record)
     if persist:
         applications_store.upsert_application(record)
 
-
 def _persist_application_update(record: dict) -> None:
-    """После изменения записи (например решение комиссии)."""
     if not record.get("is_demo"):
         applications_store.upsert_application(record)
 
-
-# ──────────────────────────────────────────────────────────────────
-# PYDANTIC СХЕМЫ
-# ──────────────────────────────────────────────────────────────────
-
 class FarmerFeatures(BaseModel):
-    """Данные для скоринга фермера."""
 
     bin_iin: str = Field(..., description="БИН/ИИН предприятия")
     company_name: str = Field(..., description="Наименование предприятия")
@@ -196,17 +143,11 @@ class FarmerFeatures(BaseModel):
     source_system: str = Field(default="manual")
     application_date: Optional[str] = None
 
-
 class DecisionRequest(BaseModel):
     application_id: str
     decision: str = Field(..., description="approved | rejected | review")
     officer_name: str
     comment: Optional[str] = None
-
-
-# ──────────────────────────────────────────────────────────────────
-# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: строим вектор фичей
-# ──────────────────────────────────────────────────────────────────
 
 DIRECTION_CODE_MAP = {
     "Субсидирование в скотоводстве": 0,
@@ -227,17 +168,14 @@ REGION_CODE_MAP = {
     "Актюбинская область": 13, "область Абай": 14,
 }
 
-
 def _build_feature_dict(f: FarmerFeatures) -> dict:
-    """Преобразует Pydantic-модель в словарь фичей для ScoringEngine."""
     now = datetime.now()
     hour = float(now.hour)
     month = float(now.month)
 
     if f.application_date:
         try:
-            # Поддерживаем как ISO (YYYY-MM-DD / YYYY-MM-DDTHH:MM:SS),
-            # так и формат из Streamlit-формы (DD.MM.YYYY HH:MM:SS)
+
             dt_str = f.application_date.strip()
             try:
                 dt = datetime.fromisoformat(dt_str)
@@ -276,11 +214,6 @@ def _build_feature_dict(f: FarmerFeatures) -> dict:
         "region_encoded":              region_encoded,
     }
 
-
-# ──────────────────────────────────────────────────────────────────
-# ЭНДПОИНТЫ
-# ──────────────────────────────────────────────────────────────────
-
 @app.get("/", tags=["Info"])
 def root():
     return {
@@ -290,12 +223,10 @@ def root():
         "docs": "/docs",
     }
 
-
 @app.get("/health", tags=["Info"])
 def health():
     return {"status": "ok", "model_loaded": _engine is not None,
             "timestamp": datetime.now().isoformat()}
-
 
 def _build_score_response(
     features: FarmerFeatures,
@@ -303,7 +234,6 @@ def _build_score_response(
     *,
     include_shap: bool = True,
 ) -> dict:
-    """Собирает ответ скоринга без записи в хранилища."""
     feature_dict = _build_feature_dict(features)
     result = engine.score_farmer(feature_dict, include_shap=include_shap)
 
@@ -346,33 +276,17 @@ def _build_score_response(
         "is_demo":               False,
     }
 
-
 @app.post("/api/v1/score", tags=["Scoring"], summary="Рассчитать скоринговый балл")
 def score_application(
     features: FarmerFeatures,
     api_key: str = Depends(verify_api_key),
     engine: ScoringEngine = Depends(get_engine),
 ):
-    """
-    Главный эндпоинт скоринга.
-
-    Принимает данные предприятия → XGBoost → SHAP → вердикт.
-    Возвращает балл 1-100, зону Green/Yellow/Red, объяснения.
-    """
     response_data = _build_score_response(features, engine)
     _register_application(response_data)
     return response_data
 
-
-# ──────────────────────────────────────────────────────────────────
-# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Gemini OCR для сканированных PDF
-# ──────────────────────────────────────────────────────────────────
-
 def _wait_gemini_file_ready(uploaded, genai_mod, timeout_s: float = 120.0):
-    """
-    После upload_file() файл в облаке обрабатывается асинхронно.
-    Без ожидания state=ACTIVE generate_content часто даёт пустой ответ.
-    """
     from google.generativeai import protos as _protos
 
     t0 = time.time()
@@ -387,21 +301,13 @@ def _wait_gemini_file_ready(uploaded, genai_mod, timeout_s: float = 120.0):
         f = genai_mod.get_file(f.name)
     return f
 
-
 def _is_gemini_quota_error(exc: BaseException) -> bool:
     s = str(exc).lower()
     if "429" in str(exc) or "quota" in s or "resource exhausted" in s:
         return True
     return "ResourceExhausted" in type(exc).__name__
 
-
 async def _gemini_ocr_pdfs(pdf_items: list[tuple[str, bytes]], api_key: str) -> tuple[str, str | None]:
-    """
-    Последний fallback: Gemini Files API + извлечение текста (в т.ч. сканы).
-
-    Возвращает (текст, сообщение_об_ошибке). При 429 не дергаем API по каждому файлу —
-    бесплатная квота сгорает мгновенно.
-    """
     import google.generativeai as genai
 
     genai.configure(api_key=api_key)
@@ -469,7 +375,6 @@ async def _gemini_ocr_pdfs(pdf_items: list[tuple[str, bytes]], api_key: str) -> 
 
     return "\n\n".join(results), None
 
-
 @app.post("/api/v1/score-with-documents", tags=["Scoring"],
           summary="Скоринг + LLM-анализ PDF документов")
 async def score_with_documents(
@@ -478,16 +383,6 @@ async def score_with_documents(
     api_key: str = Depends(verify_api_key),
     engine: ScoringEngine = Depends(get_engine),
 ):
-    """
-    Расширенный скоринг: JSON данные + PDF/DOCX документы.
-
-    ЧЕТЫРЁХСЛОЙНАЯ АРХИТЕКТУРА:
-    Слой 1: поля из таблицы CSV (сумма, регион, тип)
-    Слой 2: экономические фичи (рост продукции, долг, выживаемость)
-    Слой 3: Gemini извлекает фичи из PDF → обновляет вектор перед XGBoost
-    Слой 4: ComplianceChecker сверяет документы с реальными правилами МСХ РК
-            и корректирует итоговый балл на основе соответствия требованиям
-    """
     import json as json_lib
 
     try:
@@ -498,14 +393,13 @@ async def score_with_documents(
 
     feature_dict = _build_feature_dict(features)
     llm_summary = None
-    combined_text     = ""   # полный текст всех PDF (для метрик)
-    combined_text_llm = ""   # обрезанный текст для LLM (до 60 000 симв.)
-    extraction_note: str | None = None  # причина, если текста нет (квота Gemini и т.д.)
+    combined_text     = ""                                       
+    combined_text_llm = ""                                               
+    extraction_note: str | None = None                                                  
 
-    # ── Слой 3: Обрабатываем загруженные документы ───────────────
     if documents:
         all_texts   = []
-        pdf_items   = []   # [(filename, bytes)] — для Gemini OCR fallback
+        pdf_items   = []                                                  
 
         for doc in documents:
             if not doc.filename:
@@ -516,7 +410,6 @@ async def score_with_documents(
             if fname_lower.endswith(".pdf"):
                 pdf_items.append((doc.filename, content))
 
-                # Попытка №1: pdfplumber (быстро, только для PDF со слоем текста)
                 tmp_path = None
                 try:
                     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
@@ -538,8 +431,6 @@ async def score_with_documents(
                 text = content.decode("utf-8", errors="ignore")
                 all_texts.append(f"=== {doc.filename} ===\n{text}")
 
-        # Попытка №2: Gemini Files API OCR (сканированные PDF / пустой результат pdfplumber)
-        # Запускаем если хоть один PDF не дал текст
         gemini_api_key = os.getenv("GEMINI_API_KEY")
         missing = [item for item in pdf_items
                    if not any(item[0] in t for t in all_texts)]
@@ -564,14 +455,13 @@ async def score_with_documents(
             print(f"[docs] итого текст: {len(combined_text)} → {len(combined_text_llm)} симв. для LLM")
 
             if gemini_api_key:
-                # Извлекаем структурированные фичи из документов
+
                 extraction = extract_features_from_documents(combined_text_llm, gemini_api_key)
 
                 if extraction["extraction_status"] == "success":
                     doc_features = extraction["features"]
                     llm_summary = extraction.get("llm_summary")
 
-                    # Обновляем вектор фичей данными из реальных документов
                     for llm_field, our_field in [
                         ("veterinary_compliance", "veterinary_compliance"),
                         ("pedigree_ratio",        "pedigree_ratio"),
@@ -582,28 +472,14 @@ async def score_with_documents(
                         if val is not None:
                             feature_dict[our_field] = float(val)
 
-                    # Бонус за подтверждённый ветпаспорт
                     if doc_features.get("has_vet_passport") == 1.0:
                         feature_dict["veterinary_compliance"] = min(
                             1.0, feature_dict["veterinary_compliance"] + 0.05
                         )
 
-    # ── Слой 2: XGBoost скоринг + SHAP ───────────────────────────
     result = engine.score_farmer(feature_dict, llm_context=llm_summary)
     base_score = result["score"]
 
-    # ── Слой 4: Gemini-compliance + адаптивное взвешивание ──────────
-    #
-    # Логика: Gemini анализирует загруженные PDF и возвращает:
-    #   • overall_score_pct  — оценку полноты/качества документов (0–100)
-    #   • doc_completeness   — доля ключевых разделов, найденных в документах (0–1)
-    #
-    # На основе doc_completeness выбираются адаптивные веса:
-    #   completeness >= 0.70 → (ML 55 % : DOC 45 %) — документы богатые
-    #   completeness >= 0.40 → (ML 75 % : DOC 25 %) — документы частичные
-    #   completeness <  0.40 → (ML 90 % : DOC 10 %) — документы слабые, флаг ручной проверки
-    #
-    # Финальный балл: w_ml * score_ml + w_doc * score_doc
     compliance_report   = None
     final_score         = base_score
     score_doc           = None
@@ -620,17 +496,13 @@ async def score_with_documents(
             gemini_api_key=gemini_api_key if gemini_api_key else None,
         )
 
-        # Извлекаем оценку документов из compliance-отчёта
         score_doc = float(compliance_report.get("overall_score_pct", 50.0))
 
-        # doc_completeness: доля найденных ключевых полей в документах
-        # Если compliance-модуль не вернул — оцениваем по длине текста
         doc_completeness = compliance_report.get("doc_completeness")
         if doc_completeness is None:
             char_count = len(combined_text)
             doc_completeness = min(1.0, char_count / 8000)
 
-        # Адаптивные веса
         if doc_completeness >= 0.70:
             ml_weight, doc_weight = 0.55, 0.45
         elif doc_completeness >= 0.40:
@@ -661,7 +533,6 @@ async def score_with_documents(
 
     app_id = str(uuid.uuid4())[:8].upper()
 
-    # Текст из PDF для экспертного заключения Gemini на вкладке XAI (полный объём, с ограничением)
     _MAX_DOC_TEXT_STORE = 280_000
     _doc_text_store = (combined_text[:_MAX_DOC_TEXT_STORE] if combined_text.strip() else None)
     if not combined_text.strip() and documents and not extraction_note:
@@ -675,7 +546,6 @@ async def score_with_documents(
         "bin_iin":                features.bin_iin,
         "region":                 features.region,
 
-        # ── Скоринг ──────────────────────────────────────────────
         "score_ml":               base_score,
         "score_doc":              score_doc,
         "score":                  final_score,
@@ -686,7 +556,6 @@ async def score_with_documents(
         "zone_label":             final_zone_label,
         "recommendation":         final_recommendation,
 
-        # ── SHAP объяснения ───────────────────────────────────────
         "verdict":                result["verdict"],
         "top_positive_factors":   result["top_positive_factors"],
         "top_negative_factors":   result["top_negative_factors"],
@@ -694,10 +563,8 @@ async def score_with_documents(
         "shap_base_value":        result.get("shap_base_value"),
         "raw_features_used":      result.get("raw_features_used", {}),
 
-        # ── Compliance отчёт (Слой 4) ─────────────────────────────
         "compliance": compliance_report,
 
-        # ── Метаданные ────────────────────────────────────────────
         "llm_document_analysis":  llm_summary,
         "documents_processed":    len(documents),
         "documents_text_chars":   len(combined_text),
@@ -719,21 +586,18 @@ async def score_with_documents(
     _register_application(response_data)
     return response_data
 
-
 @app.get("/api/v1/applications", tags=["Applications"])
 def get_applications(
     api_key: str = Depends(verify_api_key),
     zone: Optional[str] = None,
     min_score: Optional[float] = None,
 ):
-    """Список заявок, отсортированных по убыванию балла."""
     apps = list(_applications_db)
     if zone:
         apps = [a for a in apps if a.get("zone") == zone]
     if min_score is not None:
         apps = [a for a in apps if a.get("score", 0) >= min_score]
     return sorted(apps, key=lambda x: x.get("score", 0), reverse=True)
-
 
 @app.get("/api/v1/applications/{application_id}", tags=["Applications"])
 def get_application(application_id: str, api_key: str = Depends(verify_api_key)):
@@ -742,18 +606,11 @@ def get_application(application_id: str, api_key: str = Depends(verify_api_key))
             return app
     raise HTTPException(status_code=404, detail="Заявка не найдена")
 
-
 @app.post("/api/v1/decision", tags=["Decisions"])
 def record_decision(
     decision_req: DecisionRequest,
     api_key: str = Depends(verify_api_key),
 ):
-    """
-    Фиксирует решение комиссии (Human-in-the-Loop).
-
-    ИИ даёт рекомендацию → человек принимает финальное решение.
-    Каждое решение логируется с ФИО и временной меткой (аудит-трейл).
-    """
     if decision_req.decision not in ("approved", "rejected", "review"):
         raise HTTPException(status_code=400,
                             detail="decision: approved | rejected | review")
@@ -780,13 +637,11 @@ def record_decision(
 
     return record
 
-
 @app.post("/api/v1/giss/sync", tags=["Demo"], summary="Сгенерировать тестовые заявки")
 def sync_demo_applications(
     api_key: str = Depends(verify_api_key),
     engine: ScoringEngine = Depends(get_engine),
 ):
-    """Демо: случайные заявки только в оперативной памяти, без записи в SQLite."""
     import random
 
     REGIONS    = ["Алматинская область", "Акмолинская область", "Жамбылская область",
@@ -830,10 +685,8 @@ def sync_demo_applications(
         "applications": synced,
     }
 
-
 @app.get("/api/v1/analytics/summary", tags=["Analytics"])
 def get_analytics_summary(api_key: str = Depends(verify_api_key)):
-    """Сводная аналитика для дашборда МСХ (без тестовых заявок)."""
     real = [a for a in _applications_db if not a.get("is_demo")]
     if not real:
         return {"message": "Нет данных для анализа"}

@@ -57,7 +57,7 @@ otadisiAI/
 
 ```bash
 git clone https://github.com/Ota272/otadisiAI.git
-cd model
+cd otadisiAI/
 python -m venv .venv
 ```
 

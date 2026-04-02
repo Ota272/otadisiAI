@@ -136,11 +136,6 @@ streamlit run app.py
 
 ---
 
-## Лицензия
-
-См. файл `LICENSE` в репозитории (если добавлен).
-
----
 
 <p align="center">
   <b>SmartAgro Score</b> · ML + SHAP + LLM для прозрачного скоринга субсидий АПК

@@ -20,7 +20,7 @@ if str(ROOT_DIR) not in sys.path:
 from ml.shap_integration import generate_gemini_expert_opinion
 
 def _load_env_vars():
-    env_path = Path(__file__).resolve().with_name(".env")
+    env_path = ROOT_DIR / ".env"
 
     try:
         from dotenv import load_dotenv                

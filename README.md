@@ -78,7 +78,11 @@ pip install -r requirements.txt
 ```env
 GEMINI_API_KEY=ваш_ключ_Google_AI_Studio
 ```
+https://aistudio.google.com/api-keys
 
+модель бесплатная, просто можно будет менять ключ, 
+ошибка "429 You exceeded your current quota, please check your plan and billing details." - абсолютно нормальна, модель бесплатная, просто можно будет менять ключ, 
+это не критично.
 Без ключа часть функций (разбор PDF, заключения LLM, compliance) будет недоступна; базовый скоринг по числовым полям работает при наличии обученной модели.
 
 ### 3. Модель (если артефактов ещё нет)

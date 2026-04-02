@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartAgro Score API v2 — Документация</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root { --primary: #1e3a5f; --accent: #2563eb; --success: #059669; --success-bg: #ecfdf5; --warn: #d97706; --warn-bg: #fffbeb; --danger: #dc2626; --danger-bg: #fef2f2; --bg: #f8fafc; --surface: #ffffff; --border: #e2e8f0; --text: #1e293b; --text-secondary: #475569; --code-bg: #1e293b; --code-text: #e2e8f0; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.6; }
+        .header { background: var(--surface); border-bottom: 2px solid var(--border); padding: 20px 40px; display: flex; align-items: center; gap: 24px; position: sticky; top: 0; z-index: 100; }
+        .logo { font-size: 22px; font-weight: 700; color: var(--primary); }
+        .badge { background: var(--primary); color: #fff; font-size: 10px; padding: 4px 10px; border-radius: 4px; }
+        .version { background: var(--accent); color: #fff; font-size: 10px; padding: 4px 10px; border-radius: 4px; }
+        .nav { margin-left: auto; display: flex; gap: 20px; }
+        .nav a { color: var(--text-secondary); text-decoration: none; }
+        .container { display: flex; max-width: 1200px; margin: 0 auto; padding: 40px; gap: 40px; }
+        .sidebar { width: 250px; flex-shrink: 0; position: sticky; top: 100px; height: fit-content; }
+        .sidebar-nav { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+        .sidebar-nav h3 { font-size: 11px; color: #94a3b8; text-transform: uppercase; margin-bottom: 12px; }
+        .sidebar-nav ul { list-style: none; }
+        .sidebar-nav li { margin-bottom: 8px; }
+        .sidebar-nav a { color: var(--text-secondary); text-decoration: none; font-size: 13px; display: block; padding: 8px 12px; border-radius: 6px; }
+        .sidebar-nav a:hover, .sidebar-nav a.active { background: var(--bg); color: var(--accent); }
+        .main { flex: 1; max-width: 800px; }
+        .section { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 32px; margin-bottom: 24px; }
+        .section h2 { font-size: 20px; font-weight: 700; color: var(--primary); margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px solid var(--border); }
+        .section h3 { font-size: 16px; font-weight: 600; margin: 24px 0 12px; }
+        .endpoint { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding: 16px; background: var(--bg); border-radius: 8px; }
+        .method { padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+        .method.post { background: var(--success); color: #fff; }
+        .method.get { background: var(--accent); color: #fff; }
+        .path { font-family: 'JetBrains Mono', monospace; font-size: 14px; }
+        .code { background: var(--code-bg); color: var(--code-text); padding: 20px; border-radius: 8px; font-family: 'JetBrains Mono', monospace; font-size: 12px; overflow-x: auto; margin: 16px 0; }
+        .code .c { color: #64748b; }
+        .code .s { color: #86efac; }
+        .code .n { color: #fcd34d; }
+        .code .k { color: #60a5fa; }
+        .tabs { display: flex; margin: 16px 0; border-bottom: 1px solid var(--border); }
+        .tab { padding: 10px 20px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-secondary); cursor: pointer; }
+        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 16px 0; }
+        th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+        th { background: var(--bg); font-weight: 600; font-size: 11px; text-transform: uppercase; color: #94a3b8; }
+        td:first-child { font-family: 'JetBrains Mono', monospace; }
+        .req { display: inline-block; padding: 2px 6px; background: var(--danger-bg); color: var(--danger); border-radius: 4px; font-size: 10px; margin-left: 8px; }
+        .info { background: var(--success-bg); border: 1px solid #a7f3d0; border-left: 4px solid var(--success); padding: 16px; border-radius: 6px; margin: 16px 0; }
+        .warn { background: var(--warn-bg); border: 1px solid #fcd34d; border-left: 4px solid var(--warn); padding: 16px; border-radius: 6px; margin: 16px 0; }
+        .footer { text-align: center; padding: 40px; color: #94a3b8; font-size: 12px; border-top: 1px solid var(--border); }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <span class="logo">SmartAgro Score</span>
+        <span class="badge">API</span>
+        <span class="version">v2.0</span>
+        <nav class="nav"><a href="/docs">Swagger</a><a href="/redoc">ReDoc</a></nav>
+    </header>
+    <div class="container">
+        <aside class="sidebar">
+            <nav class="sidebar-nav">
+                <h3>Введение</h3>
+                <ul>
+                    <li><a href="#overview" class="active">Обзор</a></li>
+                    <li><a href="#auth">Авторизация</a></li>
+                    <li><a href="#features">Признаки</a></li>
+                </ul>
+                <h3 style="margin-top:20px">Endpoints</h3>
+                <ul>
+                    <li><a href="#score">POST /api/v1/score</a></li>
+                    <li><a href="#score-docs">POST /api/v1/score-with-documents</a></li>
+                    <li><a href="#applications">GET /api/v1/applications</a></li>
+                    <li><a href="#decision">POST /api/v1/decision</a></li>
+                </ul>
+            </nav>
+        </aside>
+        <main class="main">
+            <section id="overview" class="section">
+                <h2>Обзор API</h2>
+                <div class="info"><strong>Base URL:</strong> <code>http://localhost:8003</code></div>
+                <h3>Системные требования</h3>
+                <table>
+                    <tr><th>Параметр</th><th>Значение</th></tr>
+                    <tr><td>Версия</td><td>v2.0</td></tr>
+                    <tr><td>Авторизация</td><td>API Key (Header: X-API-Key)</td></tr>
+                    <tr><td>Формат</td><td>JSON</td></tr>
+                    <tr><td>Rate Limit</td><td>1000 запросов/час</td></tr>
+                    <tr><td>ML Модель</td><td>XGBoost + SHAP</td></tr>
+                    <tr><td>LLM</td><td>Google Gemini 2.0 Flash</td></tr>
+                </table>
+            </section>
+            <section id="auth" class="section">
+                <h2>Авторизация</h2>
+                <p>Все запросы требуют API ключ в заголовке <code>X-API-Key</code>.</p>
+                <div class="warn"><strong>Важно:</strong> Не передавайте ключ в URL или теле запроса.</div>
+                <h3>Пример</h3>
+                <div class="tabs"><button class="tab active" data-tab="curl">curl</button><button class="tab" data-tab="py">Python</button><button class="tab" data-tab="js">JS</button></div>
+                <div id="curl" class="tab-content active"><div class="code">curl -X GET http://localhost:8003/api/v1/applications \<br>  -H "X-API-Key: sk-msgov-2025-demo-key-abc123"</div></div>
+                <div id="py" class="tab-content"><div class="code"><span class="k">import</span> requests<br>r = requests.get(<span class="s">"http://localhost:8003/api/v1/applications"</span>, headers={<span class="s">"X-API-Key"</span>: <span class="s">"sk-msgov-2025-demo-key-abc123"</span>})</div></div>
+                <div id="js" class="tab-content"><div class="code"><span class="k">const</span> r = <span class="k">await</span> fetch(<span class="s">'http://localhost:8003/api/v1/applications'</span>, {headers: {<span class="s">'X-API-Key'</span>: <span class="s">'sk-msgov-2025-demo-key-abc123'</span>}});</div></div>
+            </section>
+            <section id="features" class="section">
+                <h2>17 Признаков</h2>
+                <table>
+                    <tr><th>Признак</th><th>Тип</th><th>Описание</th></tr>
+                    <tr><td>gross_output_growth_yoy</td><td>float</td><td>Рост валового выпуска (-0.5–2.0)</td></tr>
+                    <tr><td>land_to_livestock_ratio</td><td>float</td><td>Земля/поголовье (0.1–15.0)</td></tr>
+                    <tr><td>historical_survival_rate</td><td>float</td><td>Выживаемость (0–1)</td></tr>
+                    <tr><td>subsidy_dependence_index</td><td>float</td><td>Зависимость от субсидий (0–1)</td></tr>
+                    <tr><td>veterinary_compliance</td><td>float</td><td>Вет. соответствие (0–1)</td></tr>
+                    <tr><td>years_in_operation</td><td>int</td><td>Лет работы (0–50)</td></tr>
+                    <tr><td>pedigree_ratio</td><td>float</td><td>Доля племенного (0–1)</td></tr>
+                    <tr><td>previous_subsidies_count</td><td>int</td><td>Предыдущие субсидии (0–20)</td></tr>
+                    <tr><td>debt_load_ratio</td><td>float</td><td>Долг/EBITDA (0–10)</td></tr>
+                </table>
+            </section>
+            <section id="score" class="section">
+                <div class="endpoint"><span class="method post">POST</span><span class="path">/api/v1/score</span></div>
+                <p>Расчёт скорингового балла (0–100).</p>
+                <h3>Параметры</h3>
+                <table>
+                    <tr><th>Параметр</th><th>Описание</th></tr>
+                    <tr><td>bin_iin <span class="req">req</span></td><td>БИН/ИИН (12 цифр)</td></tr>
+                    <tr><td>company_name <span class="req">req</span></td><td>Наименование</td></tr>
+                    <tr><td>region <span class="req">req</span></td><td>Область РК</td></tr>
+                    <tr><td>subsidy_type <span class="req">req</span></td><td>Тип субсидии</td></tr>
+                    <tr><td>requested_amount <span class="req">req</span></td><td>Сумма (тенге)</td></tr>
+                    <tr><td>pedigree_ratio</td><td>Доля племенного (0.5)</td></tr>
+                    <tr><td>veterinary_compliance</td><td>Вет. соответствие (0.85)</td></tr>
+                    <tr><td>years_in_operation</td><td>Лет работы (5)</td></tr>
+                </table>
+                <h3>Пример</h3>
+                <div class="tabs"><button class="tab active" data-tab="curl2">curl</button><button class="tab" data-tab="py2">Python</button></div>
+                <div id="curl2" class="tab-content active"><div class="code">curl -X POST http://localhost:8003/api/v1/score \<br>  -H "Content-Type: application/json" \<br>  -H "X-API-Key: sk-msgov-2025-demo-key-abc123" \<br>  -d '{"bin_iin":"123456789012","company_name":"ТОО Агро-Нур","region":"Алматинская область","subsidy_type":"КРС","requested_amount":15000000,"pedigree_ratio":0.85}'</div></div>
+                <div id="py2" class="tab-content"><div class="code"><span class="k">import</span> requests<br>p = {<span class="s">"bin_iin"</span>: <span class="s">"123456789012"</span>, <span class="s">"company_name"</span>: <span class="s">"ТОО Агро-Нур"</span>, <span class="s">"region"</span>: <span class="s">"Алматинская область"</span>, <span class="s">"requested_amount"</span>: <span class="n">15000000</span>}<br>r = requests.post(<span class="s">"http://localhost:8003/api/v1/score"</span>, json=p, headers={<span class="s">"X-API-Key"</span>: <span class="s">"sk-msgov-2025-demo-key-abc123"</span>})</div></div>
+                <h3>Ответ</h3>
+                <div class="code">{<br>  <span class="s">"application_id"</span>: <span class="s">"A7F2B1C0"</span>,<br>  <span class="s">"score_ml"</span>: <span class="n">84.5</span>,<br>  <span class="s">"zone"</span>: <span class="s">"green"</span>,<br>  <span class="s">"recommendation"</span>: <span class="s">"Строго рекомендовано"</span>,<br>  <span class="s">"top_positive_factors"</span>: [...],<br>  <span class="s">"top_negative_factors"</span>: [...]<br>}</div>
+            </section>
+            <section id="score-docs" class="section">
+                <div class="endpoint"><span class="method post">POST</span><span class="path">/api/v1/score-with-documents</span></div>
+                <p>Скоринг с загрузкой PDF (LLM + Gemini OCR).</p>
+                <div class="info"><strong>Gemini OCR:</strong> Требуется GEMINI_API_KEY</div>
+                <h3>Пример</h3>
+                <div class="code">curl -X POST http://localhost:8003/api/v1/score-with-documents \<br>  -H "X-API-Key: sk-msgov-2025-demo-key-abc123" \<br>  -F 'features_json={"bin_iin":"123456789012","company_name":"ТОО","requested_amount":15000000}' \<br>  -F 'documents=@ustav.pdf'</div>
+            </section>
+            <section id="applications" class="section">
+                <div class="endpoint"><span class="method get">GET</span><span class="path">/api/v1/applications</span></div>
+                <p>Список заявок (сортировка по баллу).</p>
+                <h3>Query параметры</h3>
+                <table>
+                    <tr><th>Параметр</th><th>Описание</th></tr>
+                    <tr><td>zone</td><td>Фильтр: green/yellow/red</td></tr>
+                    <tr><td>min_score</td><td>Мин. балл</td></tr>
+                </table>
+                <h3>Пример</h3>
+                <div class="code">curl "http://localhost:8003/api/v1/applications?zone=green&min_score=80" \<br>  -H "X-API-Key: sk-msgov-2025-demo-key-abc123"</div>
+            </section>
+            <section id="decision" class="section">
+                <div class="endpoint"><span class="method post">POST</span><span class="path">/api/v1/decision</span></div>
+                <p>Решение комиссии (Human-in-the-Loop).</p>
+                <h3>Параметры</h3>
+                <table>
+                    <tr><th>Параметр</th><th>Описание</th></tr>
+                    <tr><td>application_id <span class="req">req</span></td><td>ID заявки</td></tr>
+                    <tr><td>decision <span class="req">req</span></td><td>approved/rejected/review</td></tr>
+                    <tr><td>comment</td><td>Комментарий</td></tr>
+                </table>
+                <h3>Пример</h3>
+                <div class="code">curl -X POST http://localhost:8003/api/v1/decision \<br>  -H "Content-Type: application/json" \<br>  -H "X-API-Key: sk-msgov-2025-demo-key-abc123" \<br>  -d '{"application_id":"A7F2B1C0","decision":"approved","comment":"Соответствует критериям, рекомендовано к одобрению"}'</div>
+            </section>
+            <section class="section">
+                <h2>Зоны скоринга</h2>
+                <table>
+                    <tr><th>Зона</th><th>Диапазон</th><th>Рекомендация</th></tr>
+                    <tr><td style="color:var(--success)">🟢 green</td><td>80–100</td><td>Строго рекомендовано</td></tr>
+                    <tr><td style="color:var(--warn)">🟡 yellow</td><td>50–79</td><td>Рассмотрение комиссией</td></tr>
+                    <tr><td style="color:var(--danger)">🔴 red</td><td>0–49</td><td>Не рекомендовано</td></tr>
+                </table>
+            </section>
+        </main>
+    </div>
+    <footer class="footer">SmartAgro Score v2.0 | МСХ РК | Decentrathon 5.0</footer>
+    <script>
+        document.querySelectorAll('.tab').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const group = this.closest('.tabs');
+                const id = this.dataset.tab;
+                group.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+                group.parentElement.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                this.classList.add('active');
+                document.getElementById(id).classList.add('active');
+            });
+        });
+        document.querySelectorAll('.sidebar-nav a').forEach(link => {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                const target = document.getElementById(this.getAttribute('href').substring(1));
+                if (target) {
+                    target.scrollIntoView({behavior: 'smooth'});
+                    document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.remove('active'));
+                    this.classList.add('active');
+                }
+            });
+        });
+    </script>
+</body>
+</html>

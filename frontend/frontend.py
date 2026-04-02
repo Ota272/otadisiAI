@@ -10,7 +10,14 @@ import streamlit as st
 from datetime import datetime, timedelta
 import os
 from pathlib import Path
-from shap_integration import generate_gemini_expert_opinion
+import sys
+
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from ml.shap_integration import generate_gemini_expert_opinion
 
 def _load_env_vars():
     env_path = Path(__file__).resolve().with_name(".env")
@@ -1551,10 +1558,8 @@ with tab3:
             </div>
             """, unsafe_allow_html=True)
 
-            hitl_col1, hitl_col2, hitl_col3 = st.columns([2, 1, 1])
+            hitl_col1, hitl_col2, hitl_col3 = st.columns([3, 1, 1])
             with hitl_col1:
-                officer = st.text_input("ФИО уполномоченного сотрудника", value="Минсельхоз",
-                                        key=f"officer_{selected_id}")
                 comment = st.text_area("Комментарий (необязательно)", height=60,
                                        key=f"comment_{selected_id}")
             with hitl_col2:
@@ -1563,7 +1568,6 @@ with tab3:
                     payload = {
                         "application_id": selected_id,
                         "decision": "approved",
-                        "officer_name": officer,
                         "comment": comment,
                     }
                     result = _api_post("/api/v1/decision", payload)
@@ -1578,7 +1582,6 @@ with tab3:
                     payload = {
                         "application_id": selected_id,
                         "decision": "rejected",
-                        "officer_name": officer,
                         "comment": comment,
                     }
                     result = _api_post("/api/v1/decision", payload)
@@ -1600,152 +1603,198 @@ with tab3:
                 """, unsafe_allow_html=True)
 
 with tab4:
-    st.markdown("### 🔌 Интеграция API — Инструкция для внешних систем")
+    st.markdown("### 🔌 Интеграция API — Примеры запросов")
 
-    c_left, c_right = st.columns([3, 2])
+    st.markdown("""
+    <div class="info-box">
+        <h4>📌 Базовая информация</h4>
+        <p style="font-size:14px; color:#444; line-height:1.7;">
+            <b>Base URL:</b> <code>http://localhost:8003</code><br>
+            <b>Авторизация:</b> API Key в заголовке <code>X-API-Key</code><br>
+            <b>Формат:</b> JSON<br>
+            <b>Rate Limit:</b> 1000 запросов/час
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    with c_left:
-        st.markdown("""
-        <div class="info-box">
-            <h4>📌 О Scoring Engine API</h4>
-            <p style="font-size:14px; color:#444; line-height:1.7;">
-                SmartAgro Score API предоставляет REST-интерфейс для интеграции с государственными
-                информационными системами ГИСС и eGov. Система принимает данные заявок, выполняет
-                ML-скоринг с генерацией SHAP-объяснений и возвращает структурированный результат.
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+    st.divider()
 
-        st.markdown("#### 🚀 Быстрый старт")
+    # POST /api/v1/score
+    st.markdown("#### 1. POST /api/v1/score — Базовый скоринг")
+    st.caption("Расчёт скорингового балла по числовым данным")
 
-        st.markdown("**Шаг 1. Получите API ключ**")
-        st.markdown("""<div class="code-block">
-# Ваш API ключ (передавать в заголовке каждого запроса)<br>
-X-API-Key: sk-msgov-2025-demo-key-abc123
-</div>""", unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Запрос:**")
+        st.code("""curl -X POST http://localhost:8003/api/v1/score \\
+  -H "Content-Type: application/json" \\
+  -H "X-API-Key: sk-msgov-2025-demo-key-abc123" \\
+  -d '{
+    "bin_iin": "123456789012",
+    "company_name": "ТОО Агро-Нур",
+    "region": "Алматинская область",
+    "subsidy_type": "Приобретение племенного КРС",
+    "requested_amount": 15000000,
+    "pedigree_ratio": 0.85,
+    "veterinary_compliance": 0.98,
+    "years_in_operation": 7
+  }'""", language="bash")
 
-        st.markdown("**Шаг 2. Отправьте данные заявки на скоринг**")
-        st.markdown("""<div class="code-block">
-curl -X POST https://smartagro.msxrk.kz/api/v1/score \\<br>
-&nbsp;&nbsp;-H "Content-Type: application/json" \\<br>
-&nbsp;&nbsp;-H "X-API-Key: YOUR_KEY" \\<br>
-&nbsp;&nbsp;-d '{<br>
-&nbsp;&nbsp;&nbsp;&nbsp;"bin_iin": "123456789012",<br>
-&nbsp;&nbsp;&nbsp;&nbsp;"company_name": "ТОО Агро-Нур",<br>
-&nbsp;&nbsp;&nbsp;&nbsp;"region": "Алматинская",<br>
-&nbsp;&nbsp;&nbsp;&nbsp;"subsidy_type": "Приобретение племенного КРС",<br>
-&nbsp;&nbsp;&nbsp;&nbsp;"requested_amount": 15000000,<br>
-&nbsp;&nbsp;&nbsp;&nbsp;"gross_output_growth": 0.18,<br>
-&nbsp;&nbsp;&nbsp;&nbsp;"pedigree_ratio": 0.85,<br>
-&nbsp;&nbsp;&nbsp;&nbsp;"land_utilization": 0.9,<br>
-&nbsp;&nbsp;&nbsp;&nbsp;"historical_survival_rate": 0.92,<br>
-&nbsp;&nbsp;&nbsp;&nbsp;"debt_load_ratio": 1.2,<br>
-&nbsp;&nbsp;&nbsp;&nbsp;"subsidy_utilization_history": 0.95,<br>
-&nbsp;&nbsp;&nbsp;&nbsp;"years_in_operation": 7,<br>
-&nbsp;&nbsp;&nbsp;&nbsp;"veterinary_compliance": 0.98<br>
-&nbsp;&nbsp;}'
-</div>""", unsafe_allow_html=True)
+    with col2:
+        st.markdown("**Ответ:**")
+        st.code("""{
+  "application_id": "A7F2B1C0",
+  "score_ml": 84.5,
+  "zone": "green",
+  "recommendation": "Строго рекомендовано",
+  "top_positive_factors": [
+    {"label": "Доля племенного поголовья", "shap_value": 14.2},
+    {"label": "Ветеринария", "shap_value": 8.5}
+  ],
+  "top_negative_factors": [
+    {"label": "Долговая нагрузка", "shap_value": -3.1}
+  ]
+}""", language="json")
 
-        st.markdown("**Шаг 3. Получите результат скоринга**")
-        st.markdown("""<div class="code-block">
-{<br>
-&nbsp;&nbsp;"application_id": "A7F2B1C0",<br>
-&nbsp;&nbsp;"company_name": "ТОО Агро-Нур",<br>
-&nbsp;&nbsp;"score": 84.5,<br>
-&nbsp;&nbsp;"score_category": "green",<br>
-&nbsp;&nbsp;"recommendation": "Строго рекомендовано к одобрению",<br>
-&nbsp;&nbsp;"shap_explanation": [<br>
-&nbsp;&nbsp;&nbsp;&nbsp;{ "label": "Доля племенного поголовья", "shap_value": 14.2, "direction": "positive" },<br>
-&nbsp;&nbsp;&nbsp;&nbsp;{ "label": "Долговая нагрузка", "shap_value": -3.1, "direction": "negative" }<br>
-&nbsp;&nbsp;],<br>
-&nbsp;&nbsp;"model_version": "GBM-v1.0-mock"<br>
-}
-</div>""", unsafe_allow_html=True)
+    st.divider()
 
-        st.markdown("#### 📋 Доступные эндпоинты")
-        endpoints_data = {
-            "Метод": ["POST", "POST", "GET", "POST", "POST", "GET"],
-            "Эндпоинт": [
-                "/api/v1/score",
-                "/api/v1/score-with-documents",
-                "/api/v1/applications",
-                "/api/v1/giss/sync",
-                "/api/v1/decision",
-                "/api/v1/analytics/summary",
-            ],
-            "Описание": [
-                "Скоринг по числовым данным",
-                "Скоринг + LLM-анализ PDF + проверка правил",
-                "Список всех заявок (по убыванию балла)",
-                "Тестовые заявки (демо, не сохраняются в БД)",
-                "Фиксация решения комиссии (Human-in-Loop)",
-                "Сводная аналитика для дашборда",
-            ],
-            "Авторизация": ["✅"] * 6,
-        }
-        st.dataframe(pd.DataFrame(endpoints_data), hide_index=True, use_container_width=True)
+    # POST /api/v1/score-with-documents
+    st.markdown("#### 2. POST /api/v1/score-with-documents — Скоринг с документами")
+    st.caption("Скоринг + LLM-анализ PDF-документов + проверка правил")
 
-    with c_right:
-        st.markdown("#### 🔑 Управление API ключами")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Запрос:**")
+        st.code("""curl -X POST http://localhost:8003/api/v1/score-with-documents \\
+  -H "X-API-Key: sk-msgov-2025-demo-key-abc123" \\
+  -F 'features_json={
+    "bin_iin": "123456789012",
+    "company_name": "ТОО Агро-Нур",
+    "region": "Алматинская область",
+    "requested_amount": 15000000
+  }' \\
+  -F 'documents=@ustav.pdf' \\
+  -F 'documents=@veterinary_cert.pdf'""", language="bash")
 
-        st.markdown(f"""
-        <div style="background:#0f1a2e; border:1px solid #1e3060; border-radius:10px;
-             padding:18px 20px; margin-bottom:16px;">
-            <div style="color:#8ab4e8; font-size:11px; margin-bottom:8px; letter-spacing:0.5px;">
-                АКТИВНЫЙ API КЛЮЧ (МСХ РК)
-            </div>
-            <div style="color:#7de3a0; font-family:'Courier New',monospace; font-size:14px;
-                 word-break:break-all; line-height:1.8;">
-                {st.session_state.api_key_display}
-            </div>
-            <div style="color:#6b7a99; font-size:11px; margin-top:8px;">
-                Создан: 2025-01-01 | Доступ: score, read, sync
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown("**Ответ:**")
+        st.code("""{
+  "application_id": "A7F2B1C0",
+  "score_ml": 84.5,
+  "score_bonus": 5.0,
+  "score_final": 89.5,
+  "zone": "green",
+  "compliance_status": "passed",
+  "llm_analysis": {
+    "documents_processed": 2,
+    "compliance_score": 95,
+    "issues": []
+  },
+  "recommendation": "Строго рекомендовано"
+}""", language="json")
 
-        new_owner = st.text_input("Название организации", placeholder="ГИСС — Региональный офис Алматы")
-        if st.button("🔑 Сгенерировать новый ключ", use_container_width=True):
-            if new_owner:
-                result = _api_get(f"/api/v1/keys/generate?owner={new_owner}")
-                if result:
-                    st.session_state.api_key_display = result.get("api_key", "")
-                    st.success(f"Новый ключ сгенерирован для: {new_owner}")
-                    st.rerun()
-            else:
-                st.warning("Введите название организации")
+    st.divider()
 
-        st.divider()
-        st.markdown("#### ⚙️ Системные требования")
-        st.markdown("""
-        <div style="font-size:13px; line-height:2.0; color:#444;">
-            📦 <b>Версия API:</b> v1.0<br>
-            🔒 <b>Авторизация:</b> API Key (Header: X-API-Key)<br>
-            📄 <b>Формат:</b> JSON (Content-Type: application/json)<br>
-            ⏱ <b>Rate limit:</b> 1 000 запросов/час<br>
-            🔐 <b>Шифрование:</b> TLS 1.3 (HTTPS)<br>
-            📊 <b>Модель:</b> Gradient Boosting + SHAP v0.43<br>
-            🌐 <b>Base URL:</b> https://smartagro.msxrk.kz<br>
-            📚 <b>Документация:</b> /docs (Swagger UI)
-        </div>
-        """, unsafe_allow_html=True)
+    # GET /api/v1/applications
+    st.markdown("#### 3. GET /api/v1/applications — Список заявок")
+    st.caption("Получение списка всех заявок (сортировка по баллу)")
 
-        st.divider()
-        st.markdown("#### 🏗 Архитектура интеграции")
-        st.markdown("""
-        <div style="font-size:12px; color:#555; background:#f4f6fb; padding:14px 16px;
-             border-radius:8px; border: 1px solid #dde3ef; line-height:1.9;">
-            ГИСС / eGov<br>
-            &nbsp;&nbsp;&nbsp;↓ POST /api/v1/score<br>
-            SmartAgro Score API (FastAPI)<br>
-            &nbsp;&nbsp;&nbsp;↓ ML Inference (GBM)<br>
-            &nbsp;&nbsp;&nbsp;↓ SHAP Explanation<br>
-            &nbsp;&nbsp;&nbsp;↓ JSON Response<br>
-            Дашборд МСХ РК (Streamlit)<br>
-            &nbsp;&nbsp;&nbsp;↓ Human-in-the-Loop<br>
-            Решение комиссии → ГИСС
-        </div>
-        """, unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Запрос:**")
+        st.code("""curl "http://localhost:8003/api/v1/applications?zone=green&min_score=80" \\
+  -H "X-API-Key: sk-msgov-2025-demo-key-abc123" """, language="bash")
+
+    with col2:
+        st.markdown("**Ответ:**")
+        st.code("""[
+  {
+    "application_id": "A7F2B1C0",
+    "company_name": "ТОО Агро-Нур",
+    "region": "Алматинская область",
+    "score": 84.5,
+    "zone": "green",
+    "status": "pending"
+  },
+  {
+    "application_id": "B3E8D2F1",
+    "company_name": "ТОО Байтерек",
+    "region": "Туркестанская область",
+    "score": 82.0,
+    "zone": "green",
+    "status": "approved"
+  }
+]""", language="json")
+
+    st.divider()
+
+    # POST /api/v1/decision
+    st.markdown("#### 4. POST /api/v1/decision — Решение комиссии")
+    st.caption("Фиксация решения комиссии (Human-in-the-Loop)")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Запрос:**")
+        st.code("""curl -X POST http://localhost:8003/api/v1/decision \\
+  -H "Content-Type: application/json" \\
+  -H "X-API-Key: sk-msgov-2025-demo-key-abc123" \\
+  -d '{
+    "application_id": "A7F2B1C0",
+    "decision": "approved",
+    "comment": "Соответствует критериям, рекомендовано к одобрению"
+  }'""", language="bash")
+
+    with col2:
+        st.markdown("**Ответ:**")
+        st.code("""{
+  "status": "success",
+  "application_id": "A7F2B1C0",
+  "decision": "approved",
+  "comment": "Соответствует критериям, рекомендовано к одобрению",
+  "timestamp": "2025-04-02T14:30:00Z",
+  "message": "Решение зафиксировано"
+}""", language="json")
+
+    st.divider()
+
+    # POST /api/v1/giss/sync
+    st.markdown("#### 5. POST /api/v1/giss/sync — Тестовые заявки")
+    st.caption("Синхронизация тестовых заявок (демо-режим)")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Запрос:**")
+        st.code("""curl -X POST http://localhost:8003/api/v1/giss/sync \\
+  -H "X-API-Key: sk-msgov-2025-demo-key-abc123" """, language="bash")
+
+    with col2:
+        st.markdown("**Ответ:**")
+        st.code("""{
+  "status": "success",
+  "synced_count": 15,
+  "message": "Тестовые заявки добавлены"
+}""", language="json")
+
+    st.divider()
+
+    # Таблица зон скоринга
+    st.markdown("#### 📊 Зоны скоринга")
+
+    zones_data = {
+        "Зона": ["🟢 green", "🟡 yellow", "🔴 red"],
+        "Диапазон баллов": ["80–100", "50–79", "0–49"],
+        "Рекомендация": [
+            "Строго рекомендовано",
+            "Рассмотрение комиссией",
+            "Не рекомендовано"
+        ],
+        "Вероятность одобрения": [
+            "Высокая (>90%)",
+            "Средняя (40–60%)",
+            "Низкая (<10%)"
+        ],
+    }
+    st.dataframe(pd.DataFrame(zones_data), hide_index=True, use_container_width=True)
 
 st.divider()
 st.markdown("""

@@ -44,9 +44,9 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from shap_integration import ScoringEngine, extract_features_from_documents, extract_text_from_pdf
-from compliance_checker import run_compliance_check, detect_subsidy_type
-import applications_store
+from ml.shap_integration import ScoringEngine, extract_features_from_documents, extract_text_from_pdf
+from ml.compliance_checker import run_compliance_check, detect_subsidy_type
+from src.store import applications_store
 
 app = FastAPI(
     title="SmartAgro Score API",
@@ -146,7 +146,6 @@ class FarmerFeatures(BaseModel):
 class DecisionRequest(BaseModel):
     application_id: str
     decision: str = Field(..., description="approved | rejected | review")
-    officer_name: str
     comment: Optional[str] = None
 
 DIRECTION_CODE_MAP = {
@@ -618,7 +617,6 @@ def record_decision(
     record = {
         "application_id": decision_req.application_id,
         "decision":        decision_req.decision,
-        "officer_name":    decision_req.officer_name,
         "comment":         decision_req.comment,
         "decided_at":      datetime.now().isoformat(),
     }
@@ -628,7 +626,6 @@ def record_decision(
         if app.get("application_id") == decision_req.application_id:
             app.update({
                 "decision":        decision_req.decision,
-                "officer_name":    decision_req.officer_name,
                 "decided_at":      record["decided_at"],
                 "officer_comment": decision_req.comment,
             })
@@ -709,3 +706,21 @@ def get_analytics_summary(api_key: str = Depends(verify_api_key)):
         "approved":  sum(1 for d in _decisions_db if d["decision"] == "approved"),
         "rejected":  sum(1 for d in _decisions_db if d["decision"] == "rejected"),
     }
+
+
+@app.get("/api-docs", include_in_schema=False)
+def api_docs_v2():
+    """Отдаёт красивую HTML-страницу с документацией API v2."""
+    from fastapi.responses import HTMLResponse
+    import os
+
+    docs_path = os.path.join(os.path.dirname(__file__), "api_docs_v2.html")
+    if not os.path.exists(docs_path):
+        docs_path = os.path.join(os.path.dirname(__file__), "..", "api_docs_v2.html")
+
+    if os.path.exists(docs_path):
+        with open(docs_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return HTMLResponse(content=content)
+    else:
+        raise HTTPException(status_code=404, detail="API documentation not found")

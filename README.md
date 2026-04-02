@@ -2,7 +2,7 @@
 
 **Интеллектуальный скоринг заявок на субсидии в сельском хозяйстве** — REST API на FastAPI, дашборд на Streamlit, модель **XGBoost** с объяснениями **SHAP**, опциональный разбор PDF и проверка соответствия правилам через **Google Gemini**.
 
-Проект в контексте хакатона **Decentrathon** и темы **AI for Government**. ИИ выдаёт рекомендацию; итоговое решение по заявке остаётся за комиссией.
+Проект в контексте хакатона **Decentrathon 5.0** и темы **AI for Government**. ИИ выдаёт рекомендацию; итоговое решение по заявке остаётся за комиссией МСХ РК.
 
 ---
 
@@ -11,40 +11,43 @@
 | Компонент | Описание |
 |-----------|----------|
 | **Скоринг** | Балл **0–100**, зона **green / yellow / red**, текстовая рекомендация |
-| **Объяснимость** | **SHAP** — вклад признаков в итоговый балл |
+| **Объяснимость** | **SHAP** — вклад 17 признаков в итоговый балл |
 | **Документы** | Загрузка PDF, извлечение текста, уточнение признаков и compliance через **Gemini** |
-| **Хранение** | **SQLite** (`data/applications.sqlite`) для реальных заявок; тестовые заявки только в памяти |
+| **Хранение** | **SQLite** — заявки и решения комиссии |
 | **Дашборд** | Streamlit: очередь заявок, шорт-лист, профиль с графиками и SHAP, интеграция API |
+| **Human-in-the-Loop** | Фиксация решения комиссии (approved/rejected/review) через API |
 
 ---
 
 ## Стек технологий
 
-- **Backend:** Python 3.10+, FastAPI, Uvicorn  
-- **ML:** XGBoost, scikit-learn, SHAP, joblib  
-- **LLM / PDF:** `google-generativeai`, pdfplumber, pypdf, PyMuPDF  
-- **Frontend:** Streamlit, Plotly, requests  
-- **Данные:** pandas, SQLite  
+- **Backend:** Python 3.10+, FastAPI, Uvicorn, Pydantic
+- **ML:** XGBoost, scikit-learn, SHAP, joblib, pandas, numpy
+- **LLM / PDF:** google-generativeai, pdfplumber, pypdf, PyMuPDF
+- **Frontend:** Streamlit, Plotly, requests
+- **Данные:** SQLite
 
 ---
 
 ## Структура репозитория
 
 ```
-├── main.py              # FastAPI: скоринг, документы, решения, аналитика
-├── app.py               # Streamlit-дашборд
-├── shap_integration.py  # ScoringEngine, SHAP, Gemini (текст PDF, извлечение фич)
-├── compliance_checker.py
-├── applications_store.py # SQLite: заявки (без демо)
-├── data_prep.py         # Подготовка данных → CSV фич
-├── train_model.py       # Обучение XGBoost и артефакты в models/
-├── models/              # xgb_scorer.joblib, scaler, SHAP explainer, feature_names.json
-├── data/                # БД заявок (sqlite; не коммитить секреты)
+otadisiAI/
+├── src/
+│   ├── main.py              # FastAPI: скоринг, документы, решения, аналитика
+│   └── store.py             # SQLite: заявки и решения
+├── frontend/
+│   └── frontend.py          # Streamlit-дашборд
+├── ml/
+│   ├── shap_integration.py  # ScoringEngine, SHAP, Gemini (текст PDF, извлечение фич)
+│   └── compliance_checker.py # Проверка соответствия правилам
+├── data_prep.py             # Подготовка данных → CSV фич
+├── train_model.py           # Обучение XGBoost и артефакты в models/
+├── models/                  # xgb_scorer.joblib, scaler, SHAP explainer, feature_names.json
+├── data/                    # data.csv, data_cleaned.csv, data_features.csv
 ├── requirements.txt
-└── .env                 # локально: ключи API (не коммитить)
+└── .env                     # локально: ключи API (не коммитить)
 ```
-
-В каталоге **`app/`** может лежать альтернативная/историческая версия приложения — основной сценарий из корня: **`main.py` + `app.py`**.
 
 ---
 
@@ -58,10 +61,10 @@ cd otadisiAI
 python -m venv .venv
 ```
 
-**Windows (PowerShell):**  
+**Windows (PowerShell):**
 `.venv\Scripts\activate`
 
-**Linux / macOS:**  
+**Linux / macOS:**
 `source .venv/bin/activate`
 
 ```bash
@@ -76,7 +79,7 @@ pip install -r requirements.txt
 GEMINI_API_KEY=ваш_ключ_Google_AI_Studio
 ```
 
-Без ключа часть функций (разбор PDF, заключения LLM, compliance) будет недоступна; базовый скоринг по числовым полям может работать при наличии обученной модели.
+Без ключа часть функций (разбор PDF, заключения LLM, compliance) будет недоступна; базовый скоринг по числовым полям работает при наличии обученной модели.
 
 ### 3. Модель (если артефактов ещё нет)
 
@@ -87,56 +90,93 @@ python data_prep.py
 python train_model.py
 ```
 
-В папке **`models/`** должны появиться, в частности, `xgb_scorer.joblib`, `scaler.joblib`, `shap_explainer.joblib`, `feature_names.json`.
+В папке **`models/`** должны появиться: `xgb_scorer.joblib`, `scaler.joblib`, `shap_explainer.joblib`, `feature_names.json`.
 
 ### 4. Запуск backend
 
 ```bash
-uvicorn main:app --reload --port 8000
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-- Документация API: [http://localhost:8000/docs](http://localhost:8000/docs)  
-- Проверка: [http://localhost:8000/health](http://localhost:8000/health)
+- Документация API: `http://localhost:8003/docs`
+- Проверка: `http://localhost:8003/health`
 
 ### 5. Запуск дашборда (второй терминал)
 
 ```bash
-streamlit run app.py
+streamlit run frontend/frontend.py 
 ```
-
-В настройках дашборда должен быть указан тот же хост API (по умолчанию часто `http://127.0.0.1:8000`).
 
 ---
 
 ## API (кратко)
 
-Заголовок авторизации: **`X-API-Key`** (демо-ключи заданы в `main.py`, для продакшена их нужно заменить на безопасную схему).
+Заголовок авторизации: **`X-API-Key`** (демо-ключ: `sk-msgov-2025-demo-key-abc123`).
 
 | Метод | Путь | Назначение |
 |-------|------|------------|
-| `GET` | `/` | Информация о сервисе |
-| `GET` | `/health` | Статус и загрузка модели |
-| `POST` | `/api/v1/score` | Скоринг по JSON-полям заявки |
-| `POST` | `/api/v1/score-with-documents` | Скоринг + PDF (multipart) |
-| `GET` | `/api/v1/applications` | Список заявок |
-| `GET` | `/api/v1/applications/{id}` | Одна заявка |
-| `POST` | `/api/v1/decision` | Фиксация решения комиссии |
-| `POST` | `/api/v1/giss/sync` | **Демо:** тестовые заявки (не пишутся в SQLite) |
-| `GET` | `/api/v1/analytics/summary` | Сводная аналитика по нетестовым заявкам |
+| `POST` | `/api/v1/score` | Скоринг по JSON-полям заявки (17 признаков) |
+| `POST` | `/api/v1/score-with-documents` | Скоринг + PDF (multipart/form-data) |
+| `GET` | `/api/v1/applications` | Список заявок (фильтры: zone, min_score) |
+| `POST` | `/api/v1/decision` | Фиксация решения комиссии (decision: approved/rejected/review) |
+| `POST` | `/api/v1/giss/sync` | **Demo:** генерация тестовых заявок (в памяти) |
 
-Признаков в модели **17** (см. `models/feature_names.json`).
+---
+
+## Примеры запросов
+
+### Скоринг заявки
+
+```bash
+curl -X POST http://localhost:8003/api/v1/score \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: sk-msgov-2025-demo-key-abc123" \
+  -d '{
+    "bin_iin": "123456789012",
+    "company_name": "ТОО Агро-Нур",
+    "region": "Алматинская область",
+    "subsidy_type": "Приобретение племенного КРС",
+    "requested_amount": 15000000,
+    "pedigree_ratio": 0.85,
+    "veterinary_compliance": 0.98,
+    "years_in_operation": 7
+  }'
+```
+
+### Решение комиссии
+
+```bash
+curl -X POST http://localhost:8003/api/v1/decision \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: sk-msgov-2025-demo-key-abc123" \
+  -d '{
+    "application_id": "A7F2B1C0",
+    "decision": "approved",
+    "comment": "Соответствует критериям"
+  }'
+```
+
+### Список заявок (фильтр по зоне)
+
+```bash
+curl "http://localhost:8003/api/v1/applications?zone=green&min_score=80" \
+  -H "X-API-Key: sk-msgov-2025-demo-key-abc123"
+```
+
+---
+
+## Зоны скоринга
+
+| Зона | Диапазон | Рекомендация |
+|------|----------|--------------|
+| 🟢 green | 80–100 | Строго рекомендовано |
+| 🟡 yellow | 50–79 | Рассмотрение комиссией |
+| 🔴 red | 0–49 | Не рекомендовано |
 
 ---
 
 ## Важно
 
-- Решение системы — **рекомендательное**.  
-- **Тестовые заявки** (кнопка в UI / `POST .../giss/sync`) помечаются как демо и **не сохраняются** в SQLite.  
+- Решение системы — **рекомендательное**. Финальное решение принимает комиссия МСХ РК.
+- **Тестовые заявки** (`POST /api/v1/giss/sync`) не сохраняются в SQLite.
 - Не публикуйте **`.env`** и ключи API в репозиторий.
-
----
-
-
-<p align="center">
-  <b>SmartAgro Score</b> · ML + SHAP + LLM для прозрачного скоринга субсидий АПК
-</p>

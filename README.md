@@ -102,8 +102,8 @@ python train_model.py
 uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-- Документация API: `http://localhost:8003/docs`
-- Проверка: `http://localhost:8003/health`
+- Документация API: `http://localhost:8000/docs`
+- Проверка: `http://localhost:8000/health`
 
 ### 5. Запуск дашборда (второй терминал)
 

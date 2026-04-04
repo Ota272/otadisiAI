@@ -40,6 +40,22 @@ DIRECTION_NAMES = {
     6: "прочее",
 }
 
+# These keys are expected by the feature merge logic in src/main.py.
+DOC_FEATURE_KEYS = frozenset({
+    "gross_output_growth_yoy",
+    "land_to_livestock_ratio",
+    "historical_survival_rate",
+    "subsidy_dependence_index",
+    "veterinary_compliance",
+    "years_in_operation",
+    "pedigree_ratio",
+    "previous_subsidies_count",
+    "debt_load_ratio",
+    "livestock_count",
+    "land_area_ha",
+    "has_vet_passport",
+})
+
 class ScoringEngine:
 
     def __init__(self, models_dir: Path = MODELS_DIR):
@@ -151,6 +167,8 @@ class ScoringEngine:
         factors = []
         for i, (name, shap_val) in enumerate(zip(self.feature_names, shap_values)):
             raw_val = raw_features.get(name, 0.0)
+            if raw_val is None:
+                raw_val = 0.0
             label = FEATURE_LABELS.get(name, name)
 
             explanation_text = self._explain_feature(name, raw_val, float(shap_val))
@@ -177,10 +195,10 @@ class ScoringEngine:
 
         if name == "gross_output_growth_yoy":
             pct = value * 100
-            if positive:
-                return f"Рост валовой продукции {pct:+.1f}% — предприятие наращивает объёмы"
-            else:
-                return f"Спад валовой продукции {pct:+.1f}% — отрицательная динамика за год"
+            shap_verb = "повышает итоговый балл относительно базы модели" if shap_val > 0 else "снижает итоговый балл относительно базы модели"
+            if value >= 0:
+                return f"В данных заявки рост валовой продукции {pct:+.1f}% г/г; вклад SHAP: {shap_verb}."
+            return f"В данных заявки спад валовой продукции {pct:+.1f}% г/г; вклад SHAP: {shap_verb}."
 
         elif name == "pedigree_ratio":
             pct = value * 100
@@ -211,10 +229,10 @@ class ScoringEngine:
                 return f"Нарушения ветеринарных норм (соответствие {pct:.0f}%)"
 
         elif name == "debt_load_ratio":
-            if positive:
-                return f"Низкая долговая нагрузка (Долг/EBITDA = {value:.1f}) — финансово устойчиво"
-            else:
-                return f"Высокая долговая нагрузка (Долг/EBITDA = {value:.1f}) — риск платёжеспособности"
+            shap_verb = "вклад SHAP положительный для балла" if shap_val > 0 else "вклад SHAP отрицательный для балла"
+            if value <= 0.05:
+                return f"Долг/EBITDA ≈ {value:.2f} по входу модели (нет или минимальная нагрузка); {shap_verb}."
+            return f"Долг/EBITDA = {value:.2f} по входу модели; {shap_verb}."
 
         elif name == "years_in_operation":
             if positive:
@@ -308,32 +326,56 @@ class ScoringEngine:
 
         return "\n".join(verdict_parts)
 
+def _strip_markdown_json_fence(s: str) -> str:
+    import re
+
+    t = s.strip()
+    m = re.match(r"^```(?:json)?\s*\r?\n?(.*)\r?\n?```\s*$", t, re.DOTALL | re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return t
+
+
 def extract_features_from_documents(documents_text: str, api_key: str) -> dict:
     import google.generativeai as genai
+    from google.generativeai.types import GenerationConfig
 
-    client = genai.configure(api_key=api_key)
+    genai.configure(api_key=api_key)
 
     system_prompt = """Ты — аналитик Министерства сельского хозяйства РК.
 Твоя задача: извлечь структурированные факты из документов сельхозпредприятия
-для системы скоринга субсидий.
+для системы скоринга субсидий. Числа для ML должны совпадать по смыслу с полями модели.
+
+КРИТИЧНО для полей years_in_operation, subsidy_dependence_index, gross_output_growth_yoy:
+в JSON возвращай ТОЛЬКО числа (integer или float), БЕЗ единиц измерения и без текста.
+Недопустимо: "20 лет", "20", "+25%", "менее 4%". Допустимо: 20, 0.25, 0.04.
+— years_in_operation: целое число полных лет.
+  Если в документе указан только год основания (например, 2005), ты ОБЯЗАН вычислить
+  количество лет до текущего 2026 года (2026 минус год основания) и записать это число
+  в years_in_operation (для 2005 года это 21). Не оставляй null, если год основания явно дан.
+— gross_output_growth_yoy: доля, не проценты: рост +25% за год → 0.25; спад -5% → -0.05.
+— subsidy_dependence_index: доля от 0 до 1. ПРИОРИТЕТ: если в тексте есть «менее N%»
+  (например «зависимость менее 4%»), верни строго N/100 как число — для 4% это 0.04.
+  Не подставляй «типичные для отрасли» значения; не игнорируй «менее» в пользу других процентов.
+— veterinary_compliance и historical_survival_rate: доля 0–1 (100% → 1.0, 99.2% → 0.992).
 
 Отвечай ТОЛЬКО валидным JSON без markdown-блоков, пояснений и вводных слов.
 
-Формат ответа:
+Формат ответа (строго эти ключи, никаких дополнительных полей):
 {
   "livestock_count": <число голов или null>,
-  "breed_quality_score": <0.0-1.0: 1.0=элитная племенная, 0.5=товарная, 0.2=беспородная>,
-  "has_vet_passport": <true/false>,
-  "vaccination_current": <true/false: вакцинация в последние 6 месяцев>,
-  "veterinary_compliance": <0.0-1.0 на основе документов>,
-  "land_area_ha": <площадь в гектарах или null>,
-  "has_lease_agreement": <true/false>,
-  "pedigree_ratio": <0.0-1.0 доля племенных животных или null>,
-  "years_in_operation": <число лет или null>,
-  "has_tax_certificate": <true/false>,
-  "company_type": <"ТОО"/"ИП"/"КХ"/"КФХ"/"другое">,
-  "llm_summary": "<1-2 предложения: ключевые выводы по документам>",
-  "document_completeness": <0.0-1.0: насколько полный пакет документов>
+  "land_area_ha": <площадь сельхозугодий/пастбища в гектарах или null>,
+  "land_to_livestock_ratio": <га на одну голову скота; если явно нет — null>,
+  "has_vet_passport": <true/false или null>,
+  "veterinary_compliance": <0.0-1.0 на основе документов или null>,
+  "historical_survival_rate": <0.0-1.0 сохранность/выживаемость или null>,
+  "years_in_operation": <число лет (только число) или null>,
+  "gross_output_growth_yoy": <только число: доля роста г/г (0.05 = +5%); null если нет>,
+  "subsidy_dependence_index": <только число 0.0-1.0 доля; null если нет>,
+  "pedigree_ratio": <0.0-1.0 доля племенных или null>,
+  "previous_subsidies_count": <число ранее полученных субсидий или null>,
+  "debt_load_ratio": <коэффициент Долг/EBITDA или null>,
+  "llm_summary": "<1-2 предложения: ключевые выводы по документам>"
 }"""
 
     user_message = f"""Проанализируй следующие документы сельхозпредприятия и извлеки данные:
@@ -349,23 +391,49 @@ def extract_features_from_documents(documents_text: str, api_key: str) -> dict:
             model_name="gemini-2.0-flash",
             system_instruction=system_prompt,
         )
-        message = model.generate_content(user_message)
+        generation_config = GenerationConfig(
+            response_mime_type="application/json",
+            temperature=0.15,
+        )
+        message = model.generate_content(
+            user_message,
+            generation_config=generation_config,
+        )
+        response_text = _strip_markdown_json_fence((message.text or "").strip())
+        if not response_text:
+            return {
+                "features": {},
+                "llm_summary": None,
+                "extraction_status": "empty_model_response",
+            }
 
-        response_text = message.text.strip()
-
-        import re
-        json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
-        if json_match:
-            extracted = json.loads(json_match.group())
-        else:
+        try:
             extracted = json.loads(response_text)
+        except json.JSONDecodeError:
+            import re
+
+            json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
+            if not json_match:
+                raise
+            extracted = json.loads(json_match.group())
+
+        if not isinstance(extracted, dict):
+            return {
+                "features": {},
+                "llm_summary": None,
+                "extraction_status": "response_not_object",
+            }
 
         llm_summary = extracted.pop("llm_summary", None)
 
-        for key in ["has_vet_passport", "vaccination_current", "has_lease_agreement",
-                    "has_tax_certificate"]:
+        for key in ["has_vet_passport"]:
             if key in extracted and isinstance(extracted[key], bool):
                 extracted[key] = 1.0 if extracted[key] else 0.0
+
+        unknown = [k for k in extracted.keys() if k not in DOC_FEATURE_KEYS]
+        if unknown:
+            print(f"[extract_features_from_documents] Пропускаю неизвестные ключи Gemini: {unknown}")
+        extracted = {k: v for k, v in extracted.items() if k in DOC_FEATURE_KEYS}
 
         return {
             "features": extracted,
@@ -593,8 +661,8 @@ def generate_gemini_expert_opinion(app_data: dict, api_key: str) -> str:
 
     app_summary = f"""
 === КРИТИЧЕСКИ ВАЖНО: ИСТОЧНИКИ ДАННЫХ (НЕ ПРОТИВОРЕЧЬ ЭТОМУ) ===
-1) Числовые признаки (блок «ПОКАЗАТЕЛИ ПРЕДПРИЯТИЯ») — это входные данные в модель XGBoost: из анкеты веб-формы, опциональных полей, 
-   дефолтов при «не знаю», и при наличии — извлечённые из PDF числа. Это НЕ «воздух» и НЕ выдумка LLM.
+1) Числовые признаки (блок «ПОКАЗАТЕЛИ ПРЕДПРИЯТИЯ») — фактический вход XGBoost после подстановки чисел из PDF (JSON + разбор текста) поверх анкеты.
+   При явном противоречии с дословной цитатой из PDF сначала считай возможной устаревшей записью в интерфейсе и запроси пересчёт заявки.
 2) SHAP (+/- баллы) — математическое объяснение вклада каждого признака в итоговый балл модели (SHAP TreeExplainer).
    SHAP описывает модель, а не дословную цитату из PDF. Не пиши, что «все показатели отсутствуют», если блок ПОКАЗАТЕЛИ заполнен числами.
 3) Документы PDF: {doc_status_line}
@@ -642,8 +710,18 @@ COMPLIANCE-ПРОВЕРКА ДОКУМЕНТОВ (только если был �
 - Дисквалифицирующие условия: {_dq}
 """
 
-    system_prompt = """Ты — старший эксперт-аналитик Министерства сельского хозяйства РК.
+    _years_val  = raw.get("years_in_operation")
+    _years_note = (
+        f"ВНИМАНИЕ: по данным модели years_in_operation = {_years_val} лет. "
+        "Это значение получено из анкеты/PDF — не из заголовка и не из умолчания. "
+        f"{'Предприятие ОПЫТНОЕ — запрещено называть его «молодым».' if (_years_val is not None and float(_years_val) >= 10) else ''}"
+        if _years_val is not None else ""
+    )
+
+    system_prompt = f"""Ты — старший эксперт-аналитик Министерства сельского хозяйства РК.
 Твоя задача: написать профессиональное экспертное заключение по заявке на субсидию.
+
+{_years_note}
 
 ОБЯЗАТЕЛЬНЫЕ ТРЕБОВАНИЯ К ЗАКЛЮЧЕНИЮ:
 1. Пиши строго на русском языке, официальным но понятным стилем — без markdown-символов (** ## и т.п.)
@@ -666,7 +744,17 @@ COMPLIANCE-ПРОВЕРКА ДОКУМЕНТОВ (только если был �
 8. НЕ используй символы **, ##, *, — в начале строк и другой markdown-разметки
 9. Если в запросе есть блок «ТЕКСТ ИЗ PDF-ДОКУМЕНТОВ» с непустым содержимым — это реальное содержание файлов заявки.
    Обязан опереться на него: даты, номера, наименования, суммы. Запрещено писать, что документы «не читались» или «не проанализированы по тексту».
-10. Если блока текста PDF нет или он пуст — честно укажи, что заключение только по анкетным данным и скорингу, без разбора вложений."""
+10. Если блока текста PDF нет или он пуст — честно укажи, что заключение только по анкетным данным и скорингу, без разбора вложений.
+11. КРИТИЧНО — override compliance-ошибок при наличии факта в тексте PDF:
+    а) Если compliance-чек ставит «Критическое нарушение» по учётному номеру хозяйства (БИН/ИИН),
+       но в тексте PDF или в данных заявки явно виден БИН (12-значное число) — ты ОБЯЗАН написать,
+       что требование фактически выполнено, и указать найденный БИН. Не делай этот флаг решающим приговором.
+    б) Если compliance-чек ставит «не найдено» по земельным участкам, но в PDF/данных заявки
+       указана площадь пастбищ (га/голову или Га), кадастровый номер или договор аренды земли —
+       перекрой ошибку чекера и укажи, что земля подтверждена.
+    в) Если compliance-чек «не найдено» по обязательствам, но в PDF есть «обязуюсь», «в течение 2 лет»,
+       «целевое использование», «обязательство по целевому использованию» — доверяй PDF-тексту,
+       явно это укажи и снизь вес этого флага в итоговом резюме."""
 
     _raw_doc = app_data.get("documents_extracted_text")
     _doc_txt = (_raw_doc or "").strip()

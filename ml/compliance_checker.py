@@ -1,8 +1,22 @@
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field as dc_field
 from typing import Optional
+
+
+_OBLIGATION_REGEX = re.compile(
+    r"(?:обязу[юесмьь]+|обязательств[оа]|обязуемся|сохранность)"
+    r".{0,200}?"
+    r"(?:[23]\s*год[а-я]*|два\s+года|трёх?\s+лет|двух\s+лет|не\s+менее\s+(?:двух?|2|3)\s+лет|\d+\s*\([а-яА-Я]+\)\s*лет)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_OBLIGATION_KW_REGEX = re.compile(
+    r"целевое\s+использование|воспроизводств[аео]|не\s+менее\s+(?:двух?|2|3)\s+(?:лет|года)|"
+    r"обязуюсь|обязательств|обязуемся|сохранность",
+    re.IGNORECASE,
+)
 
 SUBSIDY_RULES = {
 
@@ -45,7 +59,7 @@ SUBSIDY_RULES = {
                 "id": "R-05",
                 "text": "Принятие обязательства по целевому использованию не менее 2 лет",
                 "keywords": ["обязательств", "два года", "2 года", "целевое использование",
-                             "воспроизводств", "не менее двух лет"],
+                             "воспроизводств", "не менее двух лет", "сохранность"],
                 "critical": True,
                 "source": "Приложение 2, п.5; п.14-1 Правил",
             },
@@ -478,11 +492,31 @@ class ComplianceChecker:
         results = []
 
         for req in rules["requirements"]:
+            req_id = req.get("id", "")
             found_keywords = [kw for kw in req["keywords"] if kw.lower() in text_lower]
 
-            if len(found_keywords) >= 2:
+            # For obligation requirements (R-05 / R-08), also run regex checks
+            # that catch proximity of obligation words near timeframe words.
+            regex_match = None
+            if "обязательств" in req["text"].lower() or req_id in ("R-05", "R-06", "R-08"):
+                regex_match = _OBLIGATION_REGEX.search(documents_text)
+                if regex_match is None:
+                    # Softer check: obligation keyword exists anywhere
+                    kw_match = _OBLIGATION_KW_REGEX.search(documents_text)
+                    if kw_match:
+                        regex_match = kw_match  # flag as soft hit
+
+            if len(found_keywords) >= 2 or regex_match:
                 status = "ВЫПОЛНЕНО"
-                evidence = f"Найдены ключевые слова: {', '.join(found_keywords[:3])}"
+                if regex_match and not found_keywords:
+                    evidence = (
+                        f"Regex: найдена формулировка обязательства → "
+                        f"«{regex_match.group(0)[:120].strip()}…»"
+                    )
+                else:
+                    evidence = f"Найдены ключевые слова: {', '.join(found_keywords[:3])}"
+                    if regex_match and found_keywords:
+                        evidence += " + подтверждение обязательств через regex"
             elif len(found_keywords) == 1:
                 status = "ЧАСТИЧНО"
                 evidence = f"Частично найдено: '{found_keywords[0]}' (ожидается больше подтверждений)"
@@ -491,7 +525,7 @@ class ComplianceChecker:
                 evidence = f"Не найдены ключевые слова: {', '.join(req['keywords'][:4])}"
 
             results.append(CheckResult(
-                requirement_id=req["id"],
+                requirement_id=req_id,
                 requirement_text=req["text"],
                 status=status,
                 status_emoji=self._status_emoji(status),

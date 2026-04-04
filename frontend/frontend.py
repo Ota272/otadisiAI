@@ -531,27 +531,47 @@ def _shap_to_display_points(shap_val: float, max_abs: float, scale: float = 20.0
         return 0
     return int(round(scale * float(shap_val) / max_abs))
 
+_PROFILE_SENTINEL = float("nan")   # marks "data not available" in the profile dict
+
 def _normalized_profile_from_raw(raw: dict) -> dict[str, float]:
+    """Return a 0-100 normalised profile dict.
+
+    Fields that are None in raw_features_used are set to _PROFILE_SENTINEL so
+    callers can distinguish "truly zero" from "data missing".
+    """
     if not raw:
         return {}
-    g = float(raw.get("gross_output_growth_yoy", 0.0))
-    growth_norm = float(np.clip((g + 0.35) / 1.0 * 100, 0, 100))
-    pr = float(raw.get("pedigree_ratio", 0.5))
-    land = float(raw.get("land_to_livestock_ratio", 2.0))
-    surv = float(raw.get("historical_survival_rate", 0.85))
-    debt = float(raw.get("debt_load_ratio", 1.5))
-    sub = float(raw.get("subsidy_dependence_index", 0.3))
-    years = float(raw.get("years_in_operation", 5.0))
-    vet = float(raw.get("veterinary_compliance", 0.85))
+
+    def _get(key: str):
+        v = raw.get(key)
+        return None if v is None else float(v)
+
+    g    = _get("gross_output_growth_yoy")
+    pr   = _get("pedigree_ratio")
+    land = _get("land_to_livestock_ratio")
+    surv = _get("historical_survival_rate")
+    debt = _get("debt_load_ratio")
+    sub  = _get("subsidy_dependence_index")
+    years = _get("years_in_operation")
+    vet  = _get("veterinary_compliance")
+
+    import math
+    S = _PROFILE_SENTINEL
+
+    def _norm_growth(v):
+        if v is None:
+            return S
+        return float(np.clip((v + 0.35) / 1.0 * 100, 0, 100))
+
     return {
-        "Рост продукции": growth_norm,
-        "Племенное поголовье": pr * 100,
-        "Земля": min(land / 8.0 * 100, 100),
-        "Выживаемость": surv * 100,
-        "Долг (инверт.)": max(0.0, (1.0 - debt / 5.0)) * 100,
-        "Независимость": (1.0 - sub) * 100,
-        "Стаж": min(years / 20.0 * 100, 100),
-        "Ветеринария": vet * 100,
+        "Рост продукции":      _norm_growth(g),
+        "Племенное поголовье": S if pr   is None else min(pr   * 100, 100),
+        "Земля":               S if land is None else min(land / 8.0 * 100, 100),
+        "Выживаемость":        S if surv is None else min(surv * 100, 100),
+        "Долг (инверт.)":      S if debt is None else max(0.0, (1.0 - debt / 5.0)) * 100,
+        "Независимость":       S if sub  is None else max(0.0, (1.0 - sub) * 100),
+        "Стаж":                S if years is None else min(years / 20.0 * 100, 100),
+        "Ветеринария":         S if vet  is None else min(vet  * 100, 100),
     }
 
 def _radar_order_labels() -> list[str]:
@@ -789,39 +809,39 @@ with tab1:
             else:
 
                 _debt_map = {
-                    "Не знаю":                           1.5,
+                    "Не знаю":                           None,
                     "Низкая — Долг/EBITDA < 1.5":        0.8,
                     "Умеренная — Долг/EBITDA 1.5–3.0":   2.2,
                     "Высокая — Долг/EBITDA > 3.0":       3.8,
                 }
                 _vet_map = {
-                    "Не знаю":                                      0.85,
+                    "Не знаю":                                      None,
                     "Нарушений нет — все справки актуальны":        0.97,
                     "Есть незначительные замечания":                0.72,
                     "Есть серьёзные нарушения / запреты":           0.45,
                 }
                 _growth_map = {
-                    "Не знаю":                 0.05,
-                    "Спад (< 0%)":            -0.12,
+                    "Не знаю":                 None,
+                    "Спад (< 0%)":             -0.12,
                     "Без изменений (0–5%)":    0.03,
                     "Умеренный рост (5–20%)":  0.12,
                     "Высокий рост (> 20%)":    0.28,
                 }
                 _pedigree_map = {
-                    "Не знаю":           0.50,
+                    "Не знаю":           None,
                     "Нет или менее 20%": 0.10,
                     "20–60%":            0.40,
                     "60–90%":            0.75,
                     "Более 90%":         0.95,
                 }
                 _subsidy_exp_map = {
-                    "Не знаю":             3,
+                    "Не знаю":             None,
                     "Нет — подаю впервые": 0,
                     "1–2 раза ранее":      1,
                     "3 и более раз":       5,
                 }
                 _farm_years_map = {
-                    "Не указано":                            5,
+                    "Не указано":                            None,
                     "Малое (до 50 голов / до 100 га)":       3,
                     "Среднее (50–500 голов / 100–1000 га)":  7,
                     "Крупное (500+ голов / 1000+ га)":      15,
@@ -835,13 +855,12 @@ with tab1:
                     "direction":                man_direction,
                     "requested_amount":         man_amount,
                     "source_system":            "manual",
-
-                    "debt_load_ratio":          _debt_map.get(debt_level, 1.5),
-                    "veterinary_compliance":    _vet_map.get(vet_status, 0.85),
-                    "gross_output_growth_yoy":  _growth_map.get(growth_choice, 0.05),
-                    "pedigree_ratio":           _pedigree_map.get(pedigree_choice, 0.50),
-                    "previous_subsidies_count": _subsidy_exp_map.get(subsidy_exp, 3),
-                    "years_in_operation":       _farm_years_map.get(farm_size, 5),
+                    "debt_load_ratio":          _debt_map.get(debt_level, None),
+                    "veterinary_compliance":    _vet_map.get(vet_status, None),
+                    "gross_output_growth_yoy":  _growth_map.get(growth_choice, None),
+                    "pedigree_ratio":           _pedigree_map.get(pedigree_choice, None),
+                    "previous_subsidies_count": _subsidy_exp_map.get(subsidy_exp, None),
+                    "years_in_operation":       _farm_years_map.get(farm_size, None),
                     "normative":                15_000.0,
                 }
 
@@ -1234,16 +1253,28 @@ with tab3:
                 if pdf_ok:
                     st.caption("📄 Для этой заявки сохранён текст PDF — он мог использоваться при извлечении признаков и в заключении LLM.")
 
+                import math as _math
                 prof = _normalized_profile_from_raw(raw_features)
                 bar_labels = list(prof.keys())
-                bar_vals = [prof[k] for k in bar_labels]
+                # Separate known values from missing ones for correct rendering
+                bar_vals_plot  = [0.0 if _math.isnan(v) else v for v in [prof[k] for k in bar_labels]]
+                bar_text       = [
+                    "N/A" if _math.isnan(prof[k]) else f"{prof[k]:.0f}"
+                    for k in bar_labels
+                ]
+                bar_colors     = [
+                    "#b0bec5" if _math.isnan(prof[k]) else "#0072CE"
+                    for k in bar_labels
+                ]
                 fig_bars = go.Figure(go.Bar(
-                    x=bar_vals,
+                    x=bar_vals_plot,
                     y=bar_labels,
                     orientation="h",
-                    marker_color="#0072CE",
-                    text=[f"{v:.0f}" for v in bar_vals],
+                    marker_color=bar_colors,
+                    text=bar_text,
                     textposition="outside",
+                    customdata=bar_text,
+                    hovertemplate="%{y}: %{customdata}<extra></extra>",
                 ))
                 fig_bars.update_layout(
                     title="Ключевые показатели (нормализация 0–100 для сравнения)",
@@ -1252,11 +1283,15 @@ with tab3:
                     paper_bgcolor="#ffffff",
                     margin=dict(t=50, b=30, l=10, r=50),
                     font=dict(family="Golos Text", size=11),
-                    xaxis=dict(range=[0, 110], title="Шкала, б.н."),
+                    xaxis=dict(range=[0, 115], title="Шкала, б.н."),
                 )
+                if any(_math.isnan(prof[k]) for k in bar_labels):
+                    st.caption("⚠️ Серые столбцы — данные не были предоставлены в анкете и не найдены в PDF (отображено N/A).")
                 st.plotly_chart(fig_bars, use_container_width=True)
 
-                yoy = float(raw_features.get("gross_output_growth_yoy", 0.0))
+                _yoy_raw = raw_features.get("gross_output_growth_yoy")
+                yoy_available = _yoy_raw is not None
+                yoy = float(_yoy_raw) if yoy_available else 0.0
                 cy = datetime.now().year
                 idx_prev, idx_curr = 100.0, 100.0 * (1.0 + yoy)
                 fig_yoy = go.Figure()
@@ -1269,7 +1304,11 @@ with tab3:
                     marker=dict(size=10),
                 ))
                 fig_yoy.update_layout(
-                    title="Условная динамика по росту валовой продукции (YoY из заявки)",
+                    title=(
+                        "Условная динамика по росту валовой продукции (YoY из заявки)"
+                        if yoy_available
+                        else "Рост продукции: данные не предоставлены (N/A)"
+                    ),
                     height=240,
                     plot_bgcolor="#f8faff",
                     paper_bgcolor="#ffffff",
@@ -1279,10 +1318,15 @@ with tab3:
                     xaxis_title="Год",
                     showlegend=False,
                 )
+                if not yoy_available:
+                    st.caption("⚠️ gross_output_growth_yoy = N/A — показатель не был найден ни в анкете, ни в PDF.")
                 st.plotly_chart(fig_yoy, use_container_width=True)
 
                 radar_order = _radar_order_labels()
-                radar_vals = [prof.get(lab, 0.0) for lab in radar_order]
+                radar_vals = [
+                    0.0 if _math.isnan(prof.get(lab, _PROFILE_SENTINEL)) else prof.get(lab, 0.0)
+                    for lab in radar_order
+                ]
                 fig_radar = go.Figure(go.Scatterpolar(
                     r=radar_vals + [radar_vals[0]],
                     theta=radar_order + [radar_order[0]],

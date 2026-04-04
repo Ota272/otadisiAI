@@ -1,6 +1,9 @@
 
+import copy
 import io
 import os
+import re
+import sys
 import tempfile
 import time
 import uuid
@@ -8,8 +11,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 def _load_env_vars():
-    env_path = Path(__file__).resolve().with_name(".env")
+    env_path = _REPO_ROOT / ".env"
 
     try:
         from dotenv import load_dotenv                
@@ -80,7 +87,7 @@ async def startup_event():
     loaded = applications_store.load_all_applications()
     _applications_db.extend(loaded)
     print(f"SQLite: загружено {len(loaded)} заявок из хранилища")
-    models_dir = Path("models")
+    models_dir = _REPO_ROOT / "models"
     if not (models_dir / "xgb_scorer.joblib").exists():
         print("ВНИМАНИЕ: Модель не найдена. Запустите data_prep.py && train_model.py")
         _engine = None
@@ -112,9 +119,10 @@ _decisions_db: list[dict] = []
 def _register_application(record: dict, *, persist: bool | None = None) -> None:
     if persist is None:
         persist = not record.get("is_demo", False)
-    _applications_db.append(record)
+    stored = copy.deepcopy(record)
+    _applications_db.append(stored)
     if persist:
-        applications_store.upsert_application(record)
+        applications_store.upsert_application(stored)
 
 def _persist_application_update(record: dict) -> None:
     if not record.get("is_demo"):
@@ -128,19 +136,19 @@ class FarmerFeatures(BaseModel):
     subsidy_type: str = Field(..., description="Тип субсидии")
     requested_amount: float = Field(..., gt=0, description="Сумма (тенге)")
 
-    gross_output_growth_yoy: float = Field(default=0.0, ge=-0.5, le=2.0)
-    land_to_livestock_ratio: float = Field(default=2.0, ge=0.1, le=15.0)
-    historical_survival_rate: float = Field(default=0.88, ge=0.0, le=1.0)
-    subsidy_dependence_index: float = Field(default=0.3, ge=0.0, le=1.0)
-    veterinary_compliance: float = Field(default=0.85, ge=0.0, le=1.0)
-    years_in_operation: int = Field(default=5, ge=0, le=50)
-    pedigree_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
-    previous_subsidies_count: int = Field(default=3, ge=0, le=20)
-    debt_load_ratio: float = Field(default=1.5, ge=0.0, le=10.0)
+    gross_output_growth_yoy: Optional[float] = None
+    land_to_livestock_ratio: Optional[float] = None
+    historical_survival_rate: Optional[float] = None
+    subsidy_dependence_index: Optional[float] = None
+    veterinary_compliance: Optional[float] = None
+    years_in_operation: Optional[int] = None
+    pedigree_ratio: Optional[float] = None
+    previous_subsidies_count: Optional[int] = None
+    debt_load_ratio: Optional[float] = None
 
-    normative: float = Field(default=15000.0, gt=0)
-    direction: str = Field(default="Субсидирование в скотоводстве")
-    source_system: str = Field(default="manual")
+    normative: Optional[float] = None
+    direction: Optional[str] = None
+    source_system: Optional[str] = None
     application_date: Optional[str] = None
 
 class DecisionRequest(BaseModel):
@@ -164,8 +172,288 @@ REGION_CODE_MAP = {
     "Кызылординская область": 7, "Мангистауская область": 8,
     "Павлодарская область": 9, "Северо-Казахстанская область": 10,
     "Туркестанская область": 11, "Западно-Казахстанская область": 12,
-    "Актюбинская область": 13, "область Абай": 14,
+    "Актюбинская область": 13,     "область Абай": 14,
 }
+
+_MERGE_LOG_NULL_KEYS = frozenset({
+    "years_in_operation",
+    "debt_load_ratio",
+    "subsidy_dependence_index",
+    "gross_output_growth_yoy",
+    "historical_survival_rate",
+    "veterinary_compliance",
+    "land_to_livestock_ratio",
+    "livestock_count",
+})
+
+
+def _coerce_doc_scalar(val, key: str) -> float | None:
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return 1.0 if val else 0.0
+    if isinstance(val, (int, float)):
+        v = float(val)
+        if key == "gross_output_growth_yoy" and 1.0 < v <= 100.0:
+            return v / 100.0
+        return v
+    if isinstance(val, str):
+        s = val.strip().replace("\xa0", " ")
+        sl = s.lower()
+        if key == "years_in_operation":
+            m = re.search(
+                r"(?:основан[оаы]?\s+в|работает\s+с|с\s+года|с\s+)(\d{4})\s*(?:г\.?|года?)?",
+                s,
+                re.I,
+            )
+            if m:
+                try:
+                    y0 = int(m.group(1))
+                    age = datetime.now().year - y0
+                    if 1 <= age <= 80:
+                        return float(age)
+                except ValueError:
+                    pass
+        if ("менее" in sl or "до " in sl or "<" in sl) and re.search(r"%|\s*проц", sl):
+            m = re.search(r"(?:менее|до|<)\s*([0-9]+(?:[.,][0-9]+)?)\s*%", sl)
+            if m and (key == "subsidy_dependence_index" or "субсид" in sl or "зависим" in sl):
+                try:
+                    return min(0.99, float(m.group(1).replace(",", ".")) / 100.0)
+                except ValueError:
+                    pass
+        m = re.search(r"(\d{1,2})\s*(?:лет|год|года|лет\s+работы)", s, re.I)
+        if m and key == "years_in_operation":
+            return float(m.group(1))
+        if key == "gross_output_growth_yoy" and "%" in s:
+            m = re.search(r"[-+]?\s*([0-9]+(?:[.,][0-9]+)?)\s*%", s)
+            if m:
+                try:
+                    return float(m.group(1).replace(",", ".")) / 100.0
+                except ValueError:
+                    pass
+        m = re.search(r"[-+]?\d+(?:[.,]\d+)?(?=\s*%|\s*проц)", s)
+        if m and "%" in s:
+            try:
+                pct = float(m.group(0).replace(",", "."))
+                if key in ("historical_survival_rate", "veterinary_compliance", "pedigree_ratio", "subsidy_dependence_index"):
+                    return pct / 100.0 if pct > 1.0 else pct
+            except ValueError:
+                pass
+        m = re.search(r"[-+]?\d+(?:[.,]\d+)?", s.replace(" ", ""))
+        if m:
+            try:
+                return float(m.group(0).replace(",", "."))
+            except ValueError:
+                return None
+    return None
+
+
+def _merge_extracted_doc_features(
+    feature_dict: dict,
+    doc_features: dict,
+    *,
+    source_tag: str = "DOC",
+    force: bool = False,          # REGEX_POST passes force=True to override any prior value
+) -> None:
+    if not doc_features:
+        return
+    for key, raw in doc_features.items():
+        if key not in feature_dict:
+            print(f"[{source_tag}_SKIP] {key}: ключ отсутствует в feature_dict")
+            continue
+        if raw is None:
+            if key in _MERGE_LOG_NULL_KEYS:
+                print(f"[{source_tag}_SKIP] {key}: null — текущее {feature_dict.get(key)!r}")
+            continue
+        coerced = _coerce_doc_scalar(raw, key)
+        if coerced is None:
+            print(f"[{source_tag}_SKIP] {key}: не удалось привести к числу, raw={raw!r}")
+            continue
+        old = feature_dict[key]
+        try:
+            old_f = float(old) if old is not None else None
+            new_f = float(coerced)
+        except (TypeError, ValueError):
+            old_f, new_f = None, float(coerced)
+        # Skip if value unchanged (unless force=True for REGEX_POST)
+        if not force and old_f is not None and abs(old_f - new_f) <= 1e-9:
+            continue
+        feature_dict[key] = new_f
+        print(f"[FEATURE_UPDATE] {key}: {old_f} → {new_f}  (source={source_tag})")
+
+    lah_raw = doc_features.get("land_area_ha")
+    lah = _coerce_doc_scalar(lah_raw, "land_area_ha") if lah_raw is not None else None
+    if lah is None and lah_raw is not None:
+        try:
+            lah = float(lah_raw)
+        except (TypeError, ValueError):
+            lah = None
+    lc = feature_dict.get("livestock_count")
+    if (
+        lah is not None
+        and lc
+        and float(lc) > 0
+        and doc_features.get("land_to_livestock_ratio") is None
+    ):
+        try:
+            coerced = float(lah) / float(lc)
+            old = feature_dict.get("land_to_livestock_ratio")
+            feature_dict["land_to_livestock_ratio"] = coerced
+            try:
+                changed = old is None or abs(float(old) - coerced) > 1e-6
+            except (TypeError, ValueError):
+                changed = True
+            if changed:
+                print(f"[{source_tag}_MERGE] land_to_livestock_ratio (из land_area_ha/livestock_count): {old} -> {coerced}")
+        except (TypeError, ValueError):
+            pass
+
+def _regex_scoring_features_from_text(text: str) -> dict[str, float]:
+    if not text or len(text) < 30:
+        return {}
+    out: dict[str, float] = {}
+
+    m = re.search(r"долг\s*/\s*ebitda\s*[=:]\s*([0-9]+(?:[.,][0-9]+)?)", text, re.IGNORECASE)
+    if m:
+        try: out["debt_load_ratio"] = float(m.group(1).replace(",", "."))
+        except ValueError: pass
+    else:
+        if re.search(r"долг\s*/\s*ebitda\s*[=:]\s*(?:0(?:[.,]0+)?)(?:\s|$|[;.,])", text, re.IGNORECASE) or \
+           re.search(r"долг\s*/\s*ebitda[\s\S]{0,50}?(?:нет|отсутствует|нулев|=\s*ноль)", text, re.IGNORECASE):
+            out["debt_load_ratio"] = 0.0
+        elif re.search(r"не\s+имеет\s+кредитн[\s\S]{0,40}нагруз", text, re.IGNORECASE) or \
+             re.search(r"кредитной\s+нагрузк[\s\S]{0,30}?нет", text, re.IGNORECASE):
+            out["debt_load_ratio"] = 0.0
+
+    for pat in (
+        r"([0-9]+(?:[.,][0-9]+)?)\s*га[\s\S]{0,25}/\s*голов",
+        r"([0-9]+(?:[.,][0-9]+)?)\s*гектар[\s\S]{0,25}/\s*голов",
+        r"[оО]беспеченност[\s\S]{0,50}([0-9]+(?:[.,][0-9]+)?)\s*га/\s*голов",
+    ):
+        mm = re.search(pat, text, re.IGNORECASE)
+        if mm:
+            try:
+                out["land_to_livestock_ratio"] = float(mm.group(1).replace(",", "."))
+            except ValueError: pass
+            break
+
+    for pat in (
+        r"(?:рост|прирост)\s+валовой\s+продукц[\s\S]{0,70}?\+?\s*([0-9]+(?:[.,][0-9]+)?)\s*%",
+        r"валовой\s+продукц[\s\S]{0,80}?\+\s*([0-9]+(?:[.,][0-9]+)?)\s*%",
+        r"рост\s+продукц(?:ии|ия)[\s\S]{0,60}?составил[\s\S]{0,25}(\d+(?:[.,]\d+)?)\s*%",
+        r"(?:рост|прирост)[\s\S]{0,40}?\+?\s*([0-9]+(?:[.,][0-9]+)?)\s*%\s*(?:за\s+год|г/г|год\s*к\s*году)",
+        r"\+?\s*(\d+(?:[.,]\d+)?)\s*%\s*(?:рост|прирост)[\s\S]{0,30}?(?:продукц|валов)"
+    ):
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            try:
+                out["gross_output_growth_yoy"] = float(m.group(1).replace(",", ".")) / 100.0
+                break
+            except ValueError: pass
+
+    for pat in (
+        r"зависимост[\s\S]{0,55}?(?:менее|до\s*|<)\s*([0-9]+(?:[.,][0-9]+)?)\s*%",
+        r"зависимость\s+от\s+субсид[\s\S]{0,60}?([0-9]+(?:[.,][0-9]+)?)\s*%"
+    ):
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            try:
+                v = float(m.group(1).replace(",", ".")) / 100.0
+                if 0 <= v <= 1: out["subsidy_dependence_index"] = v
+                break
+            except ValueError: pass
+
+    for pat in (
+        r"стаж\s+(\d{1,3})\s+лет",
+        r"стаж[\s\S]{0,40}?(\d{1,3})\s*(?:лет|год|года)(?:\s+работы)?"
+    ):
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            try:
+                y = float(m.group(1))
+                if 0 < y <= 80: out["years_in_operation"] = y
+                break
+            except ValueError: pass
+
+    if "years_in_operation" not in out:
+        m = re.search(r"(?:основан[оаы]?\s+в|работает\s+с|с\s+года\s+)\s*(\d{4})\s*(?:г\.?|года?)?", text, re.IGNORECASE)
+        if m:
+            try:
+                y0 = int(m.group(1))
+                age = datetime.now().year - y0
+                if 1 <= age <= 80: out["years_in_operation"] = float(age)
+            except ValueError: pass
+
+    for pat, key in (
+        (r"(?:выживаемост|сохранност)[\s\S]{0,70}?(\d{1,3}(?:[.,]\d+)?)\s*%", "historical_survival_rate"),
+        (r"(?:сохранност|выживаемост)[\s\S]{0,30}[:=]\s*(\d{1,3}(?:[.,]\d+)?)\s*%", "historical_survival_rate"),
+    ):
+        mm = re.search(pat, text, re.IGNORECASE)
+        if mm:
+            try:
+                pct = float(mm.group(1).replace(",", "."))
+                out[key] = pct / 100.0 if pct > 1.0 else pct
+            except ValueError: pass
+            break
+
+    if "historical_survival_rate" not in out:
+        m = re.search(r"падеж[\s\S]{0,70}?(\d{1,2}(?:[.,]\d+)?)\s*%", text, re.IGNORECASE)
+        if m:
+            try:
+                raw_p = float(m.group(1).replace(",", "."))
+                frac = raw_p / 100.0 if raw_p > 1.0 else raw_p
+                out["historical_survival_rate"] = max(0.0, min(1.0, 1.0 - frac))
+            except ValueError: pass
+
+    m = re.search(r"ветеринарн[\s\S]{0,40}соответств[\s\S]{0,40}?(\d{1,3}(?:[.,]\d+)?)\s*%", text, re.IGNORECASE)
+    if not m:
+        m = re.search(r"ветеринарное\s+соответствие\s*[:=]?\s*(\d{1,3}(?:[.,]\d+)?)\s*%?", text, re.IGNORECASE)
+    if m:
+        try:
+            pct = float(m.group(1).replace(",", "."))
+            out["veterinary_compliance"] = pct / 100.0 if pct > 1.0 else pct
+        except ValueError: pass
+
+    return out
+
+_MODEL_FEATURES_NEEDING_IMPUTE = (
+    "gross_output_growth_yoy",
+    "land_to_livestock_ratio",
+    "historical_survival_rate",
+    "subsidy_dependence_index",
+    "veterinary_compliance",
+    "years_in_operation",
+    "pedigree_ratio",
+    "previous_subsidies_count",
+    "debt_load_ratio",
+)
+
+_FEATURE_IMPUTE_IF_MISSING: dict[str, float] = {
+    "gross_output_growth_yoy": 0.05,
+    "land_to_livestock_ratio": 6.0,
+    "historical_survival_rate": 0.90,
+    "subsidy_dependence_index": 0.12,
+    "veterinary_compliance": 0.88,
+    "years_in_operation": 12.0,
+    "pedigree_ratio": 0.25,
+    "previous_subsidies_count": 0.0,
+    "debt_load_ratio": 0.6,
+}
+
+
+def _impute_missing_model_features(feature_dict: dict, *, tag: str = "IMPUTE") -> None:
+    for key in _MODEL_FEATURES_NEEDING_IMPUTE:
+        if key not in feature_dict:
+            continue
+        raw = feature_dict[key]
+        if raw is not None:
+            continue
+        default = _FEATURE_IMPUTE_IF_MISSING.get(key)
+        if default is None:
+            continue
+        feature_dict[key] = default
+        print(f"WARNING: Field {key} is missing, using default {default} ({tag})")
+
 
 def _build_feature_dict(f: FarmerFeatures) -> dict:
     now = datetime.now()
@@ -185,24 +473,45 @@ def _build_feature_dict(f: FarmerFeatures) -> dict:
         except ValueError:
             pass
 
+    normative = f.normative
+    if normative is None:
+        normative = 15000.0
+        print("WARNING: Field normative is missing, using default 15000.0")
+
+    direction = f.direction
+    if direction is None:
+        direction = "Субсидирование в скотоводстве"
+        print(
+            "WARNING: Field direction is missing, "
+            "using default Субсидирование в скотоводстве"
+        )
+
+    if f.source_system is None:
+        print("WARNING: Field source_system is missing, using default manual")
+
     log_amount = float(np.log1p(f.requested_amount))
-    livestock_count = max(1.0, f.requested_amount / max(f.normative, 1))
-    direction_code = float(DIRECTION_CODE_MAP.get(f.direction, 6))
+    livestock_count = max(1.0, f.requested_amount / max(normative, 1))
+    direction_code = float(DIRECTION_CODE_MAP.get(direction, 6))
     region_encoded = float(REGION_CODE_MAP.get(f.region, 7))
-    is_pedigree = 1.0 if ("племен" in f.direction.lower() or
-                           "племен" in f.subsidy_type.lower()) else 0.0
+    dir_l = direction.lower()
+    is_pedigree = 1.0 if ("племен" in dir_l or "племен" in f.subsidy_type.lower()) else 0.0
     is_producer = 1.0 if "производи" in f.subsidy_type.lower() else 0.0
 
+    def _opt_float(v):
+        return float(v) if v is not None else None
+
     return {
-        "gross_output_growth_yoy":     f.gross_output_growth_yoy,
-        "land_to_livestock_ratio":     f.land_to_livestock_ratio,
-        "historical_survival_rate":    f.historical_survival_rate,
-        "subsidy_dependence_index":    f.subsidy_dependence_index,
-        "veterinary_compliance":       f.veterinary_compliance,
-        "years_in_operation":          float(f.years_in_operation),
-        "pedigree_ratio":              f.pedigree_ratio,
-        "previous_subsidies_count":    float(f.previous_subsidies_count),
-        "debt_load_ratio":             f.debt_load_ratio,
+        "gross_output_growth_yoy":     _opt_float(f.gross_output_growth_yoy),
+        "land_to_livestock_ratio":     _opt_float(f.land_to_livestock_ratio),
+        "historical_survival_rate":    _opt_float(f.historical_survival_rate),
+        "subsidy_dependence_index":    _opt_float(f.subsidy_dependence_index),
+        "veterinary_compliance":       _opt_float(f.veterinary_compliance),
+        "years_in_operation":          _opt_float(f.years_in_operation),
+        "pedigree_ratio":              _opt_float(f.pedigree_ratio),
+        "previous_subsidies_count":    _opt_float(f.previous_subsidies_count),
+        "debt_load_ratio":             _opt_float(f.debt_load_ratio),
+        "land_area_ha":                None,
+        "has_vet_passport":            None,
         "log_amount":                  log_amount,
         "livestock_count":             livestock_count,
         "direction_code":              direction_code,
@@ -234,6 +543,7 @@ def _build_score_response(
     include_shap: bool = True,
 ) -> dict:
     feature_dict = _build_feature_dict(features)
+    _impute_missing_model_features(feature_dict, tag="IMPUTE_FORM")
     result = engine.score_farmer(feature_dict, include_shap=include_shap)
 
     app_id = str(uuid.uuid4())[:8].upper()
@@ -453,29 +763,41 @@ async def score_with_documents(
             combined_text_llm = combined_text[:MAX_CHARS] if len(combined_text) > MAX_CHARS else combined_text
             print(f"[docs] итого текст: {len(combined_text)} → {len(combined_text_llm)} симв. для LLM")
 
+            rx_pre = _regex_scoring_features_from_text(combined_text_llm)
+            if rx_pre:
+                _merge_extracted_doc_features(feature_dict, rx_pre, source_tag="REGEX_PRE")
+                print(f"[docs] regex (до LLM): {rx_pre}")
+
             if gemini_api_key:
-
                 extraction = extract_features_from_documents(combined_text_llm, gemini_api_key)
+                llm_summary = extraction.get("llm_summary")
+                doc_features = extraction.get("features") or {}
+                if doc_features:
+                    _merge_extracted_doc_features(feature_dict, doc_features, source_tag="GEMINI")
+                if extraction.get("extraction_status") != "success":
+                    print(
+                        f"[docs] Gemini JSON-извлечение: {extraction.get('extraction_status')} "
+                        f"(полей в ответе: {len(doc_features)})"
+                    )
 
-                if extraction["extraction_status"] == "success":
-                    doc_features = extraction["features"]
-                    llm_summary = extraction.get("llm_summary")
+                if doc_features.get("has_vet_passport") == 1.0:
+                    vc0 = feature_dict.get("veterinary_compliance")
+                    try:
+                        base_vc = float(vc0) if vc0 is not None else 0.88
+                    except (TypeError, ValueError):
+                        base_vc = 0.88
+                    feature_dict["veterinary_compliance"] = min(1.0, base_vc + 0.05)
+                    print(f"[docs] has_vet_passport: veterinary_compliance скорректировано до {feature_dict['veterinary_compliance']}")
 
-                    for llm_field, our_field in [
-                        ("veterinary_compliance", "veterinary_compliance"),
-                        ("pedigree_ratio",        "pedigree_ratio"),
-                        ("livestock_count",       "livestock_count"),
-                        ("years_in_operation",    "years_in_operation"),
-                    ]:
-                        val = doc_features.get(llm_field)
-                        if val is not None:
-                            feature_dict[our_field] = float(val)
+            rx_post = _regex_scoring_features_from_text(combined_text_llm)
+            if rx_post:
+                # force=True: REGEX_POST deterministic values override any Gemini guess
+                _merge_extracted_doc_features(
+                    feature_dict, rx_post, source_tag="REGEX_POST", force=True
+                )
+                print(f"[docs] REGEX_POST (приоритет над Gemini): {rx_post}")
 
-                    if doc_features.get("has_vet_passport") == 1.0:
-                        feature_dict["veterinary_compliance"] = min(
-                            1.0, feature_dict["veterinary_compliance"] + 0.05
-                        )
-
+    _impute_missing_model_features(feature_dict, tag="IMPUTE_DOC")
     result = engine.score_farmer(feature_dict, llm_context=llm_summary)
     base_score = result["score"]
 

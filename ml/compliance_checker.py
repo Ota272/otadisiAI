@@ -272,11 +272,78 @@ class ComplianceReport:
 
 class ComplianceChecker:
 
-    def __init__(self, gemini_api_key: Optional[str] = None):
+    def __init__(self, gemini_api_key: Optional[str] = None, use_embeddings: bool = True):
 
         self.api_key = gemini_api_key
         self.use_llm = bool(gemini_api_key)
-        print(f"ComplianceChecker инициализирован. Режим: {'LLM (Gemini)' if self.use_llm else 'Keyword search'}")
+        self.use_embeddings = use_embeddings
+        self._embed_model = None
+
+        mode = "Embeddings + Negation" if self.use_embeddings else ("LLM (Gemini)" if self.use_llm else "Keyword search")
+        print(f"ComplianceChecker инициализирован. Режим: {mode}")
+
+    def _get_embed_model(self):
+        if self._embed_model is None:
+            from sentence_transformers import SentenceTransformer
+            self._embed_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+        return self._embed_model
+
+    NEGATION_WORDS = [
+        "не выдана", "не выдано", "не получена", "не получено",
+        "не проведена", "не проведено", "не зарегистрирован",
+        "не зарегистрирована", "не оформлен", "не оформлена",
+        "не действует", "не предоставлен", "не предоставлена",
+        "отсутствует", "отсутствуют",
+        "снята", "снят", "снято", "изъят", "изъята",
+        "аннулирован", "расторгнут", "отказано", "запрещен",
+        "без права", "лишен",
+    ]
+
+    def _check_with_embeddings(self, documents_text: str, rules: dict, threshold: float = 0.45) -> list[CheckResult]:
+        from sentence_transformers import util
+
+        embed_model = self._get_embed_model()
+        sentences = [s.strip() for s in re.split(r'[.!?]+', documents_text) if len(s.strip()) > 10]
+        results = []
+
+        for req in rules["requirements"]:
+            query = " ".join(req["keywords"])
+            query_emb = embed_model.encode(query, convert_to_tensor=True)
+
+            best_score = 0.0
+            negation_found = False
+
+            for sentence in sentences:
+                s_lower = sentence.lower()
+                if any(neg in s_lower for neg in self.NEGATION_WORDS):
+                    negation_found = True
+                    continue
+                sent_emb = embed_model.encode(sentence, convert_to_tensor=True)
+                score = util.cos_sim(query_emb, sent_emb).item()
+                if score > best_score:
+                    best_score = score
+
+            if negation_found:
+                status = "НЕ НАЙДЕНО"
+                evidence = "Обнаружено отрицание в тексте"
+            elif best_score >= threshold:
+                status = "ВЫПОЛНЕНО"
+                evidence = f"cosine={best_score:.3f}"
+            else:
+                status = "НЕ НАЙДЕНО"
+                evidence = f"cosine={best_score:.3f}"
+
+            results.append(CheckResult(
+                requirement_id=req["id"],
+                requirement_text=req["text"],
+                status=status,
+                status_emoji=self._status_emoji(status),
+                found_evidence=evidence,
+                is_critical=req["critical"],
+                source=req["source"],
+            ))
+
+        return results
 
     def check(
         self,
@@ -285,10 +352,30 @@ class ComplianceChecker:
     ) -> ComplianceReport:
         rules = SUBSIDY_RULES.get(subsidy_type_key, SUBSIDY_RULES["КРС_маточное"])
 
-        if self.use_llm:
+        # Приоритет: embeddings → LLM (если есть) → keywords fallback
+        if self.use_embeddings:
+            try:
+                checks = self._check_with_embeddings(documents_text, rules)
+            except Exception as e:
+                print(f"⚠️ Embeddings ошибка ({e}), переключаюсь на keywords")
+                checks = self._check_with_keywords(documents_text, rules)
+        elif self.use_llm:
             checks = self._check_with_llm(documents_text, rules)
         else:
             checks = self._check_with_keywords(documents_text, rules)
+
+        # Если есть LLM — улучшаем результаты embeddings через LLM
+        if self.use_llm and self.use_embeddings:
+            try:
+                llm_checks = self._check_with_llm(documents_text, rules)
+                # Берём LLM результат если embeddings дали НЕ НАЙДЕНО
+                llm_map = {c.requirement_id: c for c in llm_checks}
+                for i, c in enumerate(checks):
+                    llm_c = llm_map.get(c.requirement_id)
+                    if llm_c and c.status == "НЕ НАЙДЕНО" and llm_c.status == "ВЫПОЛНЕНО":
+                        checks[i] = llm_c
+            except Exception as e:
+                print(f"⚠️ LLM улучшение не удалось ({e})")
 
         universal_checks = self._check_universal(documents_text)
         checks = universal_checks + checks
@@ -563,13 +650,14 @@ def run_compliance_check(
     subsidy_name: str,
     direction: str,
     gemini_api_key: Optional[str] = None,
+    use_embeddings: bool = True,
 ) -> dict:
     subsidy_type_key = detect_subsidy_type(subsidy_name, direction)
-    checker = ComplianceChecker(gemini_api_key=gemini_api_key)
+    checker = ComplianceChecker(gemini_api_key=gemini_api_key, use_embeddings=use_embeddings)
     report = checker.check(documents_text, subsidy_type_key)
 
     total_checks   = len(report.checks)
-    found_checks   = sum(1 for c in report.checks if c.status in ("found", "partial"))
+    found_checks   = sum(1 for c in report.checks if c.status in ("found", "partial", "ВЫПОЛНЕНО", "ЧАСТИЧНО"))
     doc_completeness = round(found_checks / total_checks, 3) if total_checks > 0 else 0.0
 
     return {

@@ -44,7 +44,7 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from ml.shap_integration import ScoringEngine, extract_features_from_documents, extract_text_from_pdf
+from ml.shap_integration import ScoringEngine, extract_features_from_documents, extract_text_from_pdf, generate_gemini_expert_opinion
 from ml.compliance_checker import run_compliance_check, detect_subsidy_type
 from src.store import applications_store
 
@@ -479,6 +479,24 @@ async def score_with_documents(
     result = engine.score_farmer(feature_dict, llm_context=llm_summary)
     base_score = result["score"]
 
+    # LLM expert opinion — только для объяснения, не влияет на скор
+    llm_expert_opinion = None
+    if combined_text.strip():
+        gemini_api_key_expert = os.getenv("GEMINI_API_KEY", "")
+        if gemini_api_key_expert:
+            try:
+                llm_expert_opinion = generate_gemini_expert_opinion(
+                    {
+                        **result,
+                        "compliance": None,  # будет добавлен ниже
+                        "documents_text_chars": len(combined_text),
+                        "documents_extracted_ok": bool(combined_text.strip()),
+                    },
+                    gemini_api_key_expert,
+                )
+            except Exception as e:
+                print(f"LLM expert opinion ошибка: {e}")
+
     compliance_report   = None
     final_score         = base_score
     score_doc           = None
@@ -487,27 +505,32 @@ async def score_with_documents(
     manual_review_flag  = False
 
     if combined_text.strip():
-        gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+        gemini_api_key_compliance = os.getenv("GEMINI_API_KEY", "")
+
+        # Если есть Gemini → LLM + embeddings вместе считают Doc Score
+        # Если нет → только embeddings
+        use_llm_for_score = bool(gemini_api_key_compliance)
+
         compliance_report = run_compliance_check(
             documents_text=combined_text_llm,
             subsidy_name=features.subsidy_type,
             direction=features.direction,
-            gemini_api_key=gemini_api_key if gemini_api_key else None,
+            gemini_api_key=gemini_api_key_compliance if use_llm_for_score else None,
+            use_embeddings=True,  # embeddings всегда
         )
 
         score_doc = float(compliance_report.get("overall_score_pct", 50.0))
 
         doc_completeness = compliance_report.get("doc_completeness")
         if doc_completeness is None:
-            char_count = len(combined_text)
-            doc_completeness = min(1.0, char_count / 8000)
+            doc_completeness = score_doc / 100.0
 
         if doc_completeness >= 0.70:
-            ml_weight, doc_weight = 0.55, 0.45
+            ml_weight, doc_weight = 0.30, 0.70
         elif doc_completeness >= 0.40:
-            ml_weight, doc_weight = 0.75, 0.25
+            ml_weight, doc_weight = 0.50, 0.50
         else:
-            ml_weight, doc_weight = 0.90, 0.10
+            ml_weight, doc_weight = 0.70, 0.30
             manual_review_flag = True
 
         raw_final  = ml_weight * base_score + doc_weight * score_doc
@@ -563,6 +586,7 @@ async def score_with_documents(
         "raw_features_used":      result.get("raw_features_used", {}),
 
         "compliance": compliance_report,
+        "llm_expert_opinion": llm_expert_opinion,  # только объяснение
 
         "llm_document_analysis":  llm_summary,
         "documents_processed":    len(documents),

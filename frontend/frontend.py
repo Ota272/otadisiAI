@@ -49,7 +49,7 @@ def _load_env_vars():
 
 _load_env_vars()
 
-API_BASE = os.getenv("SMARTAGRO_API_BASE", "http://localhost:8001")
+API_BASE = os.getenv("SMARTAGRO_API_BASE", "http://localhost:8002")
 API_KEY = os.getenv("SMARTAGRO_API_KEY", "sk-msgov-2025-demo-key-abc123")
 HEADERS = {"x-api-key": API_KEY}
 

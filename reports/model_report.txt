@@ -1,22 +1,22 @@
 
 SmartAgro Score — Model Training Report
 ========================================
-Date: 2026-04-05 04:10:26
+Date: 2026-04-05 11:24:38
 Model: XGBoost Regressor
-Features: 19
+Features: 20
 
 METRICS:
-  Train MAE:  1.962 баллов
-  Train RMSE: 2.476 баллов
-  Train R²:   0.9696
+  Train MAE:  1.946 баллов
+  Train RMSE: 2.467 баллов
+  Train R²:   0.97
 
-  Test MAE:   2.536 баллов
-  Test RMSE:  3.184 баллов
-  Test R²:    0.9506
+  Test MAE:   2.259 баллов
+  Test RMSE:  2.86 баллов
+  Test R²:    0.9596
 
-  Cross-Val MAE (5-fold): 2.658 баллов
+  Cross-Val MAE (5-fold): 2.404 баллов
 
-  MAE по зонам: {'red': 2.57, 'yellow': 2.5, 'green': 2.95}
+  MAE по зонам: {'red': 2.24, 'yellow': 2.27, 'green': 2.41}
 
 FEATURE LIST:
   1. gross_output_growth_yoy
@@ -38,3 +38,4 @@ FEATURE LIST:
   17. hour_submitted
   18. month_submitted
   19. region_encoded
+  20. language_code

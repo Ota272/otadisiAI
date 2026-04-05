@@ -18,6 +18,17 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from ml.shap_integration import generate_gemini_expert_opinion
+from frontend.locales import t as _t
+
+if "lang" not in st.session_state:
+    st.session_state.lang = "ru"
+
+def lang():
+    return st.session_state.lang
+
+def T(key, override_lang=None):
+    L = override_lang if override_lang else lang()
+    return _t(key, L)
 
 def _load_env_vars():
     env_path = ROOT_DIR / ".env"
@@ -552,12 +563,10 @@ def _api_post(
         r.raise_for_status()
         return r.json()
     except requests.exceptions.ReadTimeout:
-        st.error(
-            "⏱️ Сервер не ответил в срок. Убедитесь, что uvicorn запущен, и попробуйте снова."
-        )
+        st.error(T("api_error_timeout"))
         return None
     except Exception as e:
-        st.error(f"Ошибка API: {e}")
+        st.error(T("api_error_generic").format(error=e))
         return None
 
 def _api_post_multipart(endpoint: str, data: dict, files: list[tuple[str, tuple[str, bytes, str]]]) -> dict | None:
@@ -573,13 +582,10 @@ def _api_post_multipart(endpoint: str, data: dict, files: list[tuple[str, tuple[
         r.raise_for_status()
         return r.json()
     except requests.exceptions.ReadTimeout:
-        st.error(
-            "⏱️ Сервер не успел обработать документы за 5 минут. "
-            "Попробуйте загрузить меньше файлов или уменьшить их размер."
-        )
+        st.error(T("api_error_doc_timeout"))
         return None
     except Exception as e:
-        st.error(f"Ошибка API: {e}")
+        st.error(T("api_error_generic").format(error=e))
         return None
 
 def _api_get(endpoint: str) -> dict | list | None:
@@ -590,7 +596,7 @@ def _api_get(endpoint: str) -> dict | list | None:
         r.raise_for_status()
         return r.json()
     except Exception as e:
-        st.error(f"Ошибка API: {e}")
+        st.error(T("api_error_generic").format(error=e))
         return None
 
 def _score_pill(score: float, category: str) -> str:
@@ -765,6 +771,18 @@ def _refresh_apps():
         st.session_state.applications = data
 
 with st.sidebar:
+    # ── ТУМБЛЕР ЯЗЫКА ──
+    lang_options = {"🇷🇺 Русский": "ru", "🇰🇿 Қазақша": "kz"}
+    lang_labels = list(lang_options.keys())
+    current_lang_label = "🇷🇺 Русский" if lang() == "ru" else "🇰🇿 Қазақша"
+    selected_lang_label = st.selectbox(
+        T("lang_toggle"),
+        options=lang_labels,
+        index=lang_labels.index(current_lang_label),
+        label_visibility="collapsed",
+    )
+    st.session_state.lang = lang_options[selected_lang_label]
+
     st.markdown("""
     <div style="text-align:center; padding: 10px 0 20px 0;">
         <div style="font-size:40px;">🌾</div>
@@ -772,18 +790,18 @@ with st.sidebar:
             SmartAgro Score
         </div>
         <div style="font-size:11px; color:#8ab4e8; margin-top:4px; letter-spacing:0.5px;">
-            МСХ РК | Система скоринга субсидий
+            {T("sidebar_subtitle")}
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     st.divider()
 
-    st.markdown("**🔐 Авторизованный пользователь**")
-    st.markdown("""
+    st.markdown(f"**{T('sidebar_user')}**")
+    st.markdown(f"""
     <div style="background:rgba(255,255,255,0.08); padding:10px 14px; border-radius:8px; font-size:13px;">
-        👤 Минсельхоз<br>
-        <span style="color:#8ab4e8; font-size:12px;">Министерство сельского хозяйства РК</span>
+        👤 {T('sidebar_user_name')}<br>
+        <span style="color:#8ab4e8; font-size:12px;">{T('sidebar_user_dept')}</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -794,44 +812,44 @@ with st.sidebar:
     yellow = sum(1 for a in st.session_state.applications if a.get("zone") == "yellow")
     red = sum(1 for a in st.session_state.applications if a.get("zone") == "red")
 
-    st.markdown("**📊 Статистика очереди**")
+    st.markdown(f"**{T('sidebar_stats')}**")
     st.markdown(f"""
     <div style="font-size:13px; line-height:2;">
-        📋 Всего заявок: <b>{total}</b><br>
-        🟢 Рекомендовано: <b>{green}</b><br>
-        🟡 На рассмотрении: <b>{yellow}</b><br>
-        🔴 Не рекомендовано: <b>{red}</b>
+        {T('sidebar_total')}: <b>{total}</b><br>
+        {T('sidebar_green')}: <b>{green}</b><br>
+        {T('sidebar_yellow')}: <b>{yellow}</b><br>
+        {T('sidebar_red')}: <b>{red}</b>
     </div>
     """, unsafe_allow_html=True)
 
     st.divider()
-    st.markdown(f"<span style='font-size:11px; color:#8ab4e8;'>🕐 Последнее обновление: {datetime.now().strftime('%H:%M:%S')}</span>", unsafe_allow_html=True)
+    st.markdown(f"<span style='font-size:11px; color:#8ab4e8;'>{T('sidebar_updated')}: {datetime.now().strftime('%H:%M:%S')}</span>", unsafe_allow_html=True)
 
-st.markdown("""
+st.markdown(f"""
 <div class="gov-header">
     <div>
-        <div class="logo-text">🌾 SmartAgro Score</div>
-        <div class="logo-sub">Информационно-аналитическая система merit-based скоринга субсидий</div>
+        <div class="logo-text">{T('header_title')}</div>
+        <div class="logo-sub">{T('header_subtitle')}</div>
     </div>
-    <div class="badge">ВНУТРЕННИЙ ПОРТАЛ МСХ РК</div>
+    <div class="badge">{T('header_badge')}</div>
 </div>
 """, unsafe_allow_html=True)
 
 tab1, tab2, tab3, tab4 = st.tabs([
-    "📥 Поток заявок",
-    "📊 Шорт-лист и бюджет",
-    "🔍 Профиль фермера (XAI)",
-    "🔌 Интеграция API",
+    T("tab_applications"),
+    T("tab_shortlist"),
+    T("tab_profile"),
+    T("tab_api"),
 ])
 
 with tab1:
-    st.markdown("### 📥 Поток заявок — API и ручная загрузка")
+    st.markdown(f"### {T('tab_applications')} — {T('applications_subtitle')}")
 
     col_sync, col_status = st.columns([1, 2])
 
     with col_sync:
-        if st.button("🧪 Тестовые заявки", type="primary", use_container_width=True):
-            with st.spinner("Загрузка тестовых заявок…"):
+        if st.button(T("form_test_apps"), type="primary", use_container_width=True):
+            with st.spinner(T("form_loading_test")):
                 time.sleep(1.2)
                 data = _api_post(
                     "/api/v1/giss/sync",
@@ -839,97 +857,89 @@ with tab1:
                     timeout=(10, 120),
                 )
                 if data:
-                    st.success(f"✅ Добавлено тестовых заявок: {data['synced_count']}")
+                    st.success(T("sync_success").format(count=data['synced_count']))
                     _refresh_apps()
                     st.rerun()
 
     with col_status:
-        st.markdown("""
+        st.markdown(f"""
         <div class="giss-status">
             <span class="giss-dot"></span>
-            API скоринга: онлайн | eGov: онлайн | Тестовые заявки — по кнопке слева
+            {T('form_api_online')}
         </div>
         """, unsafe_allow_html=True)
 
     st.divider()
 
-    with st.expander("✏️ Подать заявку на скоринг", expanded=True):
+    with st.expander(T("form_expand_submit"), expanded=True):
 
-        st.markdown("### 🅰️ Вариант А — Основные данные")
-        st.caption("Обязательно для заполнения. На основе этих данных рассчитывается базовый скоринговый балл.")
+        st.markdown(f"### {T('form_section_a')}")
+        st.caption(T("form_section_a_desc"))
 
         a1, a2, a3 = st.columns(3)
         with a1:
-            man_bin = st.text_input("БИН / ИИН предприятия *", placeholder="123456789012")
-            man_company = st.text_input("Наименование предприятия *", placeholder="ТОО «Агро-Нур»")
+            man_bin = st.text_input(T("form_field_bin"), placeholder="123456789012")
+            man_company = st.text_input(T("form_field_company"), placeholder="ТОО «Агро-Нур»")
         with a2:
-            man_region = st.selectbox("Область *", VALID_REGIONS)
-            man_direction = st.selectbox("Направление субсидии *", VALID_DIRECTIONS)
+            man_region = st.selectbox(T("form_field_region"), VALID_REGIONS)
+            man_direction = st.selectbox(T("form_field_direction"), VALID_DIRECTIONS)
         with a3:
             man_subsidy = st.selectbox(
-                "Вид субсидии *",
-                ["Другое (ввести вручную)"] + VALID_SUBSIDY_NAMES,
+                T("form_field_subsidy"),
+                [T("form_field_subsidy_other")] + VALID_SUBSIDY_NAMES,
             )
             if man_subsidy == "Другое (ввести вручную)":
                 man_subsidy = st.text_input(
-                    "Введите вид субсидии *",
+                    T("form_field_subsidy_input"),
                     placeholder="Например: Субсидия на кормовые добавки",
                 )
             man_amount = st.number_input(
-                "Запрашиваемая сумма субсидии (тенге) *",
+                T("form_field_amount"),
                 min_value=100_000, max_value=500_000_000,
                 value=10_000_000, step=500_000,
             )
 
         st.divider()
 
-        st.markdown("### 🅱️ Вариант Б — Уточняющие данные *(опционально)*")
-        st.caption(
-            "Заполнение не обязательно — если оставить «Не знаю / Не указано», "
-            "модель применит статистические дефолты. "
-            "Чем точнее данные — тем точнее итоговый балл."
-        )
+        st.markdown(f"### {T('form_section_b')}")
+        st.caption(T("form_section_b_desc"))
 
         b1, b2, b3 = st.columns(3)
         with b1:
             farm_size = st.selectbox(
-                "Размер хозяйства *(опционально)*",
-                ["Не указано", "Малое (до 50 голов / до 100 га)", "Среднее (50–500 голов / 100–1000 га)", "Крупное (500+ голов / 1000+ га)"],
+                T("form_field_farm_size"),
+                [T("opt_not_specified"), T("opt_farm_small"), T("opt_farm_medium"), T("opt_farm_large")],
             )
             debt_level = st.selectbox(
-                "Долговая нагрузка *(опционально)*",
-                ["Не знаю", "Низкая — Долг/EBITDA < 1.5", "Умеренная — Долг/EBITDA 1.5–3.0", "Высокая — Долг/EBITDA > 3.0"],
+                T("form_field_debt"),
+                [T("opt_unknown"), T("opt_debt_low"), T("opt_debt_medium"), T("opt_debt_high")],
             )
         with b2:
             subsidy_exp = st.selectbox(
-                "Опыт участия в субсидировании *(опционально)*",
-                ["Не знаю", "Нет — подаю впервые", "1–2 раза ранее", "3 и более раз"],
+                T("form_field_subsidy_exp"),
+                [T("opt_unknown"), T("opt_first_time"), T("opt_prev_1_2"), T("opt_prev_3plus")],
             )
             vet_status = st.selectbox(
-                "Ветеринарное состояние хозяйства *(опционально)*",
-                ["Не знаю", "Нарушений нет — все справки актуальны", "Есть незначительные замечания", "Есть серьёзные нарушения / запреты"],
+                T("form_field_vet"),
+                [T("opt_unknown"), T("opt_vet_ok"), T("opt_vet_minor"), T("opt_vet_serious")],
             )
         with b3:
             growth_choice = st.selectbox(
-                "Динамика производства за прошлый год *(опционально)*",
-                ["Не знаю", "Спад (< 0%)", "Без изменений (0–5%)", "Умеренный рост (5–20%)", "Высокий рост (> 20%)"],
+                T("form_field_growth"),
+                [T("opt_unknown"), T("opt_growth_decline"), T("opt_growth_flat"), T("opt_growth_moderate"), T("opt_growth_high")],
             )
             pedigree_choice = st.selectbox(
-                "Доля племенного поголовья *(опционально)*",
-                ["Не знаю", "Нет или менее 20%", "20–60%", "60–90%", "Более 90%"],
+                T("form_field_pedigree"),
+                [T("opt_unknown"), T("opt_pedigree_none"), T("opt_pedigree_low"), T("opt_pedigree_mid"), T("opt_pedigree_high")],
             )
 
         st.divider()
 
-        st.markdown("### 📂 Документы заявки")
-        st.caption(
-            "Перетащите PDF-файлы или нажмите «Browse files». "
-            "LLM проанализирует каждый документ на соответствие правилам субсидирования МСХ РК "
-            "и уточнит признаки для XGBoost-модели. **Лимит: 200 МБ суммарно.**"
-        )
+        st.markdown(f"### {T('form_section_docs')}")
+        st.caption(T("form_section_docs_desc"))
 
         uploaded_docs = st.file_uploader(
-            "Загрузите любые документы заявки — ветсправки, ЭСФ, землеустройство, банковские выписки и т.д.",
+            T("form_section_docs_hint"),
             type=["pdf"],
             accept_multiple_files=True,
             key="bulk_docs",
@@ -938,60 +948,57 @@ with tab1:
         if uploaded_docs:
             total_mb = sum(len(d.getvalue()) for d in uploaded_docs) / 1_048_576
             if total_mb > 200:
-                st.error(
-                    f"❌ Суммарный объём {total_mb:.1f} МБ превышает лимит 200 МБ. "
-                    "Удалите часть файлов и попробуйте снова."
-                )
+                st.error(T("form_filesize_error").format(mb=total_mb))
                 uploaded_docs = []
             else:
-                st.success(f"✅ {len(uploaded_docs)} файл(ов) готово к отправке — {total_mb:.1f} МБ / 200 МБ")
-                with st.expander("Список загруженных файлов", expanded=False):
+                st.success(T("form_filesize_ok").format(count=len(uploaded_docs), mb=total_mb))
+                with st.expander(T("form_file_list"), expanded=False):
                     for d in uploaded_docs:
                         sz_kb = len(d.getvalue()) / 1024
                         st.caption(f"📄 {d.name} — {sz_kb:.1f} КБ")
 
-        if st.button("📤 Отправить заявку на скоринг", type="primary", use_container_width=True):
+        if st.button(T("form_btn_submit"), type="primary", use_container_width=True):
             if not man_bin.strip() or not man_company.strip():
-                st.warning("⚠️ Заполните обязательные поля Варианта А: БИН/ИИН и наименование предприятия.")
+                st.warning(T("form_warn_required"))
             else:
 
                 _debt_map = {
-                    "Не знаю":                           None,
-                    "Низкая — Долг/EBITDA < 1.5":        0.8,
-                    "Умеренная — Долг/EBITDA 1.5–3.0":   2.2,
-                    "Высокая — Долг/EBITDA > 3.0":       3.8,
+                    T("opt_unknown"):                    None,
+                    T("opt_debt_low"):                   0.8,
+                    T("opt_debt_medium"):                2.2,
+                    T("opt_debt_high"):                  3.8,
                 }
                 _vet_map = {
-                    "Не знаю":                                      None,
-                    "Нарушений нет — все справки актуальны":        0.97,
-                    "Есть незначительные замечания":                0.72,
-                    "Есть серьёзные нарушения / запреты":           0.45,
+                    T("opt_unknown"):                                None,
+                    T("opt_vet_ok"):                                 0.97,
+                    T("opt_vet_minor"):                              0.72,
+                    T("opt_vet_serious"):                            0.45,
                 }
                 _growth_map = {
-                    "Не знаю":                 None,
-                    "Спад (< 0%)":             -0.12,
-                    "Без изменений (0–5%)":    0.03,
-                    "Умеренный рост (5–20%)":  0.12,
-                    "Высокий рост (> 20%)":    0.28,
+                    T("opt_unknown"):          None,
+                    T("opt_growth_decline"):   -0.12,
+                    T("opt_growth_flat"):      0.03,
+                    T("opt_growth_moderate"):  0.12,
+                    T("opt_growth_high"):      0.28,
                 }
                 _pedigree_map = {
-                    "Не знаю":           None,
-                    "Нет или менее 20%": 0.10,
-                    "20–60%":            0.40,
-                    "60–90%":            0.75,
-                    "Более 90%":         0.95,
+                    T("opt_unknown"):    None,
+                    T("opt_pedigree_none"): 0.10,
+                    T("opt_pedigree_low"):  0.40,
+                    T("opt_pedigree_mid"):  0.75,
+                    T("opt_pedigree_high"): 0.95,
                 }
                 _subsidy_exp_map = {
-                    "Не знаю":             None,
-                    "Нет — подаю впервые": 0,
-                    "1–2 раза ранее":      1,
-                    "3 и более раз":       5,
+                    T("opt_unknown"):    None,
+                    T("opt_first_time"): 0,
+                    T("opt_prev_1_2"):   1,
+                    T("opt_prev_3plus"): 5,
                 }
                 _farm_years_map = {
-                    "Не указано":                            None,
-                    "Малое (до 50 голов / до 100 га)":       3,
-                    "Среднее (50–500 голов / 100–1000 га)":  7,
-                    "Крупное (500+ голов / 1000+ га)":      15,
+                    T("opt_not_specified"):  None,
+                    T("opt_farm_small"):     3,
+                    T("opt_farm_medium"):    7,
+                    T("opt_farm_large"):     15,
                 }
 
                 payload = {
@@ -1014,23 +1021,20 @@ with tab1:
                 if uploaded_docs:
                     total_mb_chk = sum(len(d.getvalue()) for d in uploaded_docs) / 1_048_576
                     if total_mb_chk > 200:
-                        st.error("❌ Суммарный размер файлов превышает 200 МБ — уменьшите набор документов.")
+                        st.error(T("form_error_filesize"))
                     else:
                         files = [
                             ("documents", (d.name, d.getvalue(), "application/pdf"))
                             for d in uploaded_docs
                         ]
-                        with st.spinner(
-                            f"🧠 LLM анализирует {len(uploaded_docs)} документ(ов) "
-                            f"+ XGBoost скоринг — может занять 15–30 секунд…"
-                        ):
+                        with st.spinner(T("form_spinner_docs").format(count=len(uploaded_docs))):
                             result = _api_post_multipart(
                                 "/api/v1/score-with-documents",
                                 data={"features_json": json.dumps(payload, ensure_ascii=False)},
                                 files=files,
                             )
                 else:
-                    with st.spinner("⚙️ XGBoost скоринг (без документов)…"):
+                    with st.spinner(T("form_spinner_score")):
                         result = _api_post("/api/v1/score", payload)
 
                 if result:
@@ -1050,35 +1054,26 @@ with tab1:
                             + ")_"
                         )
 
-                    st.success(
-                        f"{_ic} Заявка принята. ID: **{result['application_id']}** | "
-                        f"Итоговый балл: {score_detail}"
-                    )
+                    st.success(T("form_success_submitted").format(icon=_ic, app_id=result['application_id'], score_detail=score_detail))
                     _chars = result.get("documents_text_chars") or 0
                     _ext_note = result.get("documents_extraction_note")
                     if uploaded_docs and _chars > 0:
-                        st.caption(f"В ответе сервера: **{_chars:,}** симв. текста из PDF — на вкладке «Профиль фермера» выберите эту заявку по ID.")
+                        st.caption(T("form_caption_pdf_chars").format(chars=_chars))
                     elif uploaded_docs:
-                        st.warning(
-                            "⚠️ Файлы отправлены, но полный текст из PDF не сохранён. "
-                            + (_ext_note if _ext_note else "Проверьте логи uvicorn (квота LLM API 429, сканы без текста).")
-                        )
+                        st.warning(T("form_warn_pdf_missing") + (" " + _ext_note if _ext_note else ""))
                     st.session_state.selected_app_id = result["application_id"]
                     if _manual:
-                        st.warning(
-                            "⚠️ Документы содержат мало машиночитаемых данных. "
-                            "Рекомендуется ручная проверка комиссией."
-                        )
+                        st.warning(T("form_warn_manual_review"))
                     _refresh_apps()
                     st.rerun()
 
     st.divider()
-    st.markdown("#### 📋 Все заявки в очереди")
+    st.markdown(f"#### {T('all_apps_title')}")
 
     _refresh_apps()
 
     if not st.session_state.applications:
-        st.info("Заявок нет. Нажмите «Тестовые заявки» или добавьте вручную.")
+        st.info(T("all_apps_empty"))
     else:
         apps_sorted = sorted(st.session_state.applications, key=lambda x: x.get("score", 0), reverse=True)
 
@@ -1088,24 +1083,24 @@ with tab1:
 
         filt_cols = st.columns([2, 2, 1, 1, 1])
         with filt_cols[0]:
-            filt_region = st.selectbox("Область", ["Все"] + all_regions, index=0, key="filt_region", label_visibility="collapsed")
+            filt_region = st.selectbox(T("all_apps_filter_region"), [T("all_apps_zone_all")] + all_regions, index=0, key="filt_region", label_visibility="collapsed")
         with filt_cols[1]:
-            filt_subsidy = st.selectbox("Вид субсидии", ["Все"] + all_subsidies, index=0, key="filt_subsidy", label_visibility="collapsed")
+            filt_subsidy = st.selectbox(T("all_apps_filter_subsidy"), [T("all_apps_zone_all")] + all_subsidies, index=0, key="filt_subsidy", label_visibility="collapsed")
         with filt_cols[2]:
-            filt_zone_label = st.selectbox("Зона", ["Все", "🟢 Green", "🟡 Yellow", "🔴 Red"], index=0, key="filt_zone", label_visibility="collapsed")
+            filt_zone_label = st.selectbox(T("all_apps_filter_zone"), [T("all_apps_zone_all"), T("all_apps_zone_green"), T("all_apps_zone_yellow"), T("all_apps_zone_red")], index=0, key="filt_zone", label_visibility="collapsed")
             filt_zone = {"🟢 Green": "green", "🟡 Yellow": "yellow", "🔴 Red": "red"}.get(filt_zone_label)
         with filt_cols[3]:
-            filt_decision_label = st.selectbox("Решение", ["Все", "✅ Одобрено", "❌ Отказано", "⏳ Ожидание"], index=0, key="filt_decision", label_visibility="collapsed")
-            filt_decision_map = {"✅ Одобрено": "approved", "❌ Отказано": "rejected", "⏳ Ожидание": "pending"}
+            filt_decision_label = st.selectbox(T("all_apps_filter_decision"), [T("all_apps_decision_all"), T("all_apps_decision_approved"), T("all_apps_decision_rejected"), T("all_apps_decision_pending")], index=0, key="filt_decision", label_visibility="collapsed")
+            filt_decision_map = {T("all_apps_decision_approved"): "approved", T("all_apps_decision_rejected"): "rejected", T("all_apps_decision_pending"): "pending"}
             filt_decision = filt_decision_map.get(filt_decision_label)
         with filt_cols[4]:
-            filt_min_score = st.number_input("Мин. балл", min_value=0, max_value=100, value=0, step=5, key="filt_min_score", label_visibility="collapsed")
+            filt_min_score = st.number_input(T("all_apps_filter_min_score"), min_value=0, max_value=100, value=0, step=5, key="filt_min_score", label_visibility="collapsed")
 
         # Применяем фильтры
         filtered = apps_sorted
-        if filt_region != "Все":
+        if filt_region != T("all_apps_zone_all"):
             filtered = [a for a in filtered if a.get("region") == filt_region]
-        if filt_subsidy != "Все":
+        if filt_subsidy != T("all_apps_zone_all"):
             filtered = [a for a in filtered if a.get("subsidy_type") == filt_subsidy]
         if filt_zone is not None:
             filtered = [a for a in filtered if a.get("zone") == filt_zone]
@@ -1115,7 +1110,7 @@ with tab1:
 
         # Счётчик
         if len(filtered) != len(apps_sorted):
-            st.caption(f"Найдено {len(filtered)} из {len(apps_sorted)} заявок")
+            st.caption(T("all_apps_found").format(found=len(filtered), total=len(apps_sorted)))
 
         for app in filtered:
             cat = app.get("zone", "yellow")
@@ -1124,14 +1119,14 @@ with tab1:
             decision_status = st.session_state.decisions.get(app["application_id"], "")
             dec_badge = ""
             if decision_status == "approved":
-                dec_badge = "✅ Одобрено"
+                dec_badge = T("all_apps_decision_approved")
             elif decision_status == "rejected":
-                dec_badge = "❌ Отказано"
+                dec_badge = T("all_apps_decision_rejected")
 
             with st.container():
                 c1, c2, c3, c4, c5 = st.columns([3, 2, 1, 1, 1])
                 with c1:
-                    _demo_badge = " **[тест]**" if app.get("is_demo") else ""
+                    _demo_badge = T("all_apps_demo_tag") if app.get("is_demo") else ""
                     st.markdown(f"{icon} **{app['company_name']}**{_demo_badge} `{app['bin_iin']}`")
                 with c2:
                     st.caption(f"{app['region']} | {app['subsidy_type'][:30]}...")
@@ -1142,22 +1137,22 @@ with tab1:
                 with c5:
                     if dec_badge:
                         st.caption(dec_badge)
-                    elif st.button("Открыть", key=f"open_{app['application_id']}"):
+                    elif st.button(T("all_apps_btn_open"), key=f"open_{app['application_id']}"):
                         st.session_state.selected_app_id = app["application_id"]
-                        st.info("Перейдите на вкладку '🔍 Профиль фермера (XAI)'")
+                        st.info(T("all_apps_info_profile"))
 
 with tab2:
-    st.markdown("### 📊 Шорт-лист и распределение бюджета")
+    st.markdown(f"### {T('shortlist_title')}")
 
     col_b1, col_b2 = st.columns([1, 3])
     with col_b1:
         budget = st.number_input(
-            "💰 Бюджет транша (тенге)",
+            T("shortlist_budget_label"),
             min_value=1_000_000,
             max_value=10_000_000_000,
             value=100_000_000,
             step=5_000_000,
-            help="Введите доступный бюджет для данного транша субсидий",
+            help=T("shortlist_budget_help"),
         )
         budget_mln = budget / 1_000_000
         st.markdown(f"<div style='font-size:20px; font-weight:800; color:#003580;'>= {budget_mln:.1f} млн ₸</div>",
@@ -1173,9 +1168,9 @@ with tab2:
             m1, m2, m3 = st.columns(3)
             with m1:
                 st.markdown(f"""<div class="metric-card">
-                    <div class="m-label">Всего заявлено</div>
+                    <div class="m-label">{T('shortlist_metric_total')}</div>
                     <div class="m-value">{_fmt_tenge(total_sum)}</div>
-                    <div class="m-delta">{len(apps)} заявок</div>
+                    <div class="m-delta">{len(apps)} {T('date')}</div>
                 </div>""", unsafe_allow_html=True)
             with m2:
                 st.markdown(f"""<div class="metric-card">
@@ -1185,9 +1180,9 @@ with tab2:
                 </div>""", unsafe_allow_html=True)
             with m3:
                 st.markdown(f"""<div class="metric-card">
-                    <div class="m-label">Средний балл</div>
+                    <div class="m-label">{T('shortlist_metric_avg_score')}</div>
                     <div class="m-value">{np.mean([a['score'] for a in apps]):.0f}</div>
-                    <div class="m-delta">по всей очереди</div>
+                    <div class="m-delta">{T('shortlist_metric_avg_desc')}</div>
                 </div>""", unsafe_allow_html=True)
 
     st.divider()
@@ -1195,7 +1190,7 @@ with tab2:
     apps_sorted = sorted(st.session_state.applications, key=lambda x: x.get("score", 0), reverse=True)
 
     if not apps_sorted:
-        st.info("Заявок нет. Загрузите тестовые заявки или добавьте вручную.")
+        st.info(T("shortlist_empty"))
     else:
         # ── Фильтры ──
         all_regions = sorted(set(a.get("region", "") for a in apps_sorted if a.get("region")))
@@ -1203,18 +1198,18 @@ with tab2:
 
         filt_cols = st.columns([2, 2, 1, 1, 1])
         with filt_cols[0]:
-            filt_region = st.selectbox("Область", ["Все"] + all_regions, index=0, key="filt2_region", label_visibility="collapsed")
+            filt_region = st.selectbox(T("all_apps_filter_region"), [T("all_apps_zone_all")] + all_regions, index=0, key="filt2_region", label_visibility="collapsed")
         with filt_cols[1]:
-            filt_subsidy = st.selectbox("Вид субсидии", ["Все"] + all_subsidies, index=0, key="filt2_subsidy", label_visibility="collapsed")
+            filt_subsidy = st.selectbox(T("all_apps_filter_subsidy"), [T("all_apps_zone_all")] + all_subsidies, index=0, key="filt2_subsidy", label_visibility="collapsed")
         with filt_cols[2]:
-            filt_zone_label = st.selectbox("Зона", ["Все", "🟢 Green", "🟡 Yellow", "🔴 Red"], index=0, key="filt2_zone", label_visibility="collapsed")
+            filt_zone_label = st.selectbox(T("all_apps_filter_zone"), [T("all_apps_zone_all"), T("all_apps_zone_green"), T("all_apps_zone_yellow"), T("all_apps_zone_red")], index=0, key="filt2_zone", label_visibility="collapsed")
             filt_zone = {"🟢 Green": "green", "🟡 Yellow": "yellow", "🔴 Red": "red"}.get(filt_zone_label)
         with filt_cols[3]:
-            filt_decision_label = st.selectbox("Решение", ["Все", "✅ Одобрено", "❌ Отказано", "⏳ Ожидание"], index=0, key="filt2_decision", label_visibility="collapsed")
+            filt_decision_label = st.selectbox(T("all_apps_filter_decision"), [T("all_apps_decision_all"), T("all_apps_decision_approved"), T("all_apps_decision_rejected"), T("all_apps_decision_pending")], index=0, key="filt2_decision", label_visibility="collapsed")
             filt_decision_map = {"✅ Одобрено": "approved", "❌ Отказано": "rejected", "⏳ Ожидание": "pending"}
             filt_decision = filt_decision_map.get(filt_decision_label)
         with filt_cols[4]:
-            filt_min_score = st.number_input("Мин. балл", min_value=0, max_value=100, value=0, step=5, key="filt2_min_score", label_visibility="collapsed")
+            filt_min_score = st.number_input(T("all_apps_filter_min_score"), min_value=0, max_value=100, value=0, step=5, key="filt2_min_score", label_visibility="collapsed")
 
         # Применяем фильтры
         filtered = apps_sorted
@@ -1230,7 +1225,7 @@ with tab2:
 
         # Счётчик
         if len(filtered) != len(apps_sorted):
-            st.caption(f"Найдено {len(filtered)} из {len(apps_sorted)} заявок")
+            st.caption(T("all_apps_found").format(found=len(filtered), total=len(apps_sorted)))
 
         rows_html = ""
         cumulative = 0.0
@@ -1250,8 +1245,7 @@ with tab2:
                 rows_html += f"""
                 <tr>
                     <td colspan="7" class="budget-cutoff-row">
-                        ─── БЮДЖЕТ ИСЧЕРПАН ({_fmt_tenge(budget)}) ──
-                        Остаток: {_fmt_tenge(remaining)} | Заявки ниже не попадают в транш ───
+                        {T('shortlist_budget_exhausted').format(budget=_fmt_tenge(budget), remaining=_fmt_tenge(remaining))}
                     </td>
                 </tr>"""
                 cutoff_drawn = True
@@ -1266,14 +1260,14 @@ with tab2:
             pill = _score_pill(score, cat)
             dec_cell = ""
             if decision == "approved":
-                dec_cell = "<span style='color:green; font-weight:700;'>✅ Одобрено</span>"
+                dec_cell = f"<span style='color:green; font-weight:700;'>{T('shortlist_table_approved')}</span>"
             elif decision == "rejected":
-                dec_cell = "<span style='color:red; font-weight:700;'>❌ Отказано</span>"
+                dec_cell = f"<span style='color:red; font-weight:700;'>{T('shortlist_table_rejected')}</span>"
             else:
-                dec_cell = "<span style='color:#aaa;'>Ожидание</span>"
+                dec_cell = f"<span style='color:#aaa;'>{T('all_apps_status_pending')}</span>"
 
             date_str = app.get("application_date", app.get("calculated_at", "")[:10])
-            _demo_tag = ' <small style="color:#888;">[тест]</small>' if app.get("is_demo") else ""
+            _demo_tag = f' <small style="color:#888;">{T("all_apps_demo_tag").strip()}</small>' if app.get("is_demo") else ""
 
             rows_html += f"""
             <tr class="{row_class}">
@@ -1290,21 +1284,19 @@ with tab2:
         <table class="shortlist-table">
             <thead>
                 <tr>
-                    <th>Дата</th>
-                    <th>Предприятие</th>
-                    <th>Область</th>
-                    <th>Вид субсидии</th>
-                    <th>Сумма</th>
-                    <th>Балл</th>
-                    <th>Решение</th>
+                    <th>{T('shortlist_table_date')}</th>
+                    <th>{T('shortlist_table_company')}</th>
+                    <th>{T('shortlist_table_region')}</th>
+                    <th>{T('shortlist_table_subsidy')}</th>
+                    <th>{T('shortlist_table_amount')}</th>
+                    <th>{T('shortlist_table_score')}</th>
+                    <th>{T('shortlist_table_decision')}</th>
                 </tr>
             </thead>
             <tbody>{rows_html}</tbody>
         </table>
         <div style="margin-top:10px; font-size:12px; color:#888;">
-            🟢 80–100: строго рекомендовано &nbsp;|&nbsp;
-            🟡 50–79: требует рассмотрения &nbsp;|&nbsp;
-            🔴 &lt;50: не рекомендовано
+            {T('shortlist_legend')}
         </div>
         """
         st.markdown(table_html, unsafe_allow_html=True)
@@ -1321,13 +1313,13 @@ with tab2:
             textposition="outside",
         ))
         fig.add_hline(y=80, line_dash="dot", line_color="#1a7a4a",
-                      annotation_text="Порог рекомендации (80)", annotation_position="right")
+                      annotation_text=T("shortlist_chart_hline_80"), annotation_position="right")
         fig.add_hline(y=50, line_dash="dot", line_color="#e8a800",
-                      annotation_text="Порог рассмотрения (50)", annotation_position="right")
+                      annotation_text=T("shortlist_chart_hline_50"), annotation_position="right")
         fig.update_layout(
-            title="Распределение скоринговых баллов",
-            xaxis_title="Предприятие",
-            yaxis_title="Балл (0–100)",
+            title=T("shortlist_chart_title"),
+            xaxis_title=T("shortlist_chart_x"),
+            yaxis_title=T("shortlist_chart_y"),
             height=350,
             plot_bgcolor="#f8faff",
             paper_bgcolor="#ffffff",
@@ -1338,12 +1330,12 @@ with tab2:
         st.plotly_chart(fig, use_container_width=True)
 
 with tab3:
-    st.markdown("### 🔍 Профиль фермера — Explainable AI")
+    st.markdown(f"### {T('profile_title')}")
 
     apps = st.session_state.applications
 
     if not apps:
-        st.info("Нет заявок для анализа. Сначала добавьте заявку вручную или нажмите «Тестовые заявки».")
+        st.info(T("profile_no_apps"))
     else:
         app_names = {
             a["application_id"]: (
@@ -1357,7 +1349,7 @@ with tab3:
             default_id = list(app_names.keys())[0]
 
         selected_id = st.selectbox(
-            "Выберите предприятие для анализа",
+            T("profile_select_label"),
             options=list(app_names.keys()),
             format_func=lambda x: app_names[x],
             index=list(app_names.keys()).index(default_id),
@@ -1367,7 +1359,7 @@ with tab3:
         app = next((a for a in apps if a["application_id"] == selected_id), None)
 
         if app is None:
-            st.warning("Заявка не найдена.")
+            st.warning(T("profile_not_found"))
         else:
             cat = app.get("zone", "yellow")
             score = app.get("score", 0)
@@ -1375,13 +1367,14 @@ with tab3:
             compliance_bonus = app.get("compliance_bonus", 0)
             cat_colors = {"green": "#1a7a4a", "yellow": "#b36200", "red": "#b5001f"}
             cat_bg = {"green": "#e8f8f0", "yellow": "#fffbea", "red": "#fff0f2"}
-            cat_labels = {"green": "✅ СТРОГО РЕКОМЕНДОВАНО", "yellow": "⚠️ ТРЕБУЕТ РАССМОТРЕНИЯ", "red": "🚫 НЕ РЕКОМЕНДОВАНО"}
+            cat_labels = {"green": T("profile_verdict_green"), "yellow": T("profile_verdict_yellow"), "red": T("profile_verdict_red")}
 
             bonus_str = ""
             if compliance_bonus != 0:
                 sign = "+" if compliance_bonus > 0 else ""
                 bonus_color = "#1a7a4a" if compliance_bonus > 0 else "#b5001f"
-                bonus_str = f'<span style="font-size:13px; color:{bonus_color}; font-weight:700; margin-left:10px;">({sign}{compliance_bonus:.1f} от проверки документов)</span>'
+                bonus_label = T("profile_score_bonus").format(sign=sign, bonus=f"{compliance_bonus:.1f}")
+                bonus_str = f'<span style="font-size:13px; color:{bonus_color}; font-weight:700; margin-left:10px;">{bonus_label}</span>'
 
             st.markdown(f"""
             <div style="background:{cat_bg.get(cat,'#f8f8f8')}; border: 2px solid {cat_colors.get(cat,'#888')};
@@ -1397,7 +1390,7 @@ with tab3:
                     <div style="text-align:right;">
                         <div style="font-size:52px; font-weight:900; color:{cat_colors.get(cat,'#333')};
                              font-family:'Montserrat',sans-serif; line-height:1;">{score:.0f}</div>
-                        <div style="font-size:11px; color:#888; letter-spacing:0.5px;">/ 100 баллов {bonus_str}</div>
+                        <div style="font-size:11px; color:#888; letter-spacing:0.5px;">{T('profile_score_label')} {bonus_str}</div>
                         <div style="font-size:13px; font-weight:700; color:{cat_colors.get(cat,'#333')};
                              margin-top:4px;">{cat_labels.get(cat,'')}</div>
                     </div>
@@ -1414,27 +1407,22 @@ with tab3:
             _det = (app.get("documents_extracted_text") or "")
             _note = app.get("documents_extraction_note")
             if isinstance(_det, str) and len(_det.strip()) > 0:
-                st.success(
-                    f"📄 В заявке сохранён текст PDF: **{len(_det):,}** симв. — он будет передан в LLM для заключения."
-                )
+                st.success(T("profile_pdf_text_saved").format(chars=len(_det)))
             else:
                 if _note:
-                    st.warning(f"**Почему нет текста:** {_note}")
+                    st.warning(T("profile_pdf_text_missing_note").format(note=_note))
                 else:
-                    st.info(
-                        "Текст PDF для этой записи **не сохранён** (заявка без файлов, тестовая заявка без вложений или старая сессия). "
-                        "Подайте заявку с PDF через «Поток заявок»."
-                    )
+                    st.info(T("profile_pdf_text_missing"))
 
             col_btn, col_status_g = st.columns([1, 3])
             with col_btn:
-                if st.button("🤖 Получить заключение LLM", use_container_width=True, key=f"gemini_btn_{selected_id}"):
+                if st.button(T("profile_gemini_btn"), use_container_width=True, key=f"gemini_btn_{selected_id}"):
                     if gemini_key:
-                        with st.spinner("LLM: анкета + сохранённый текст PDF (если есть)…"):
+                        with st.spinner(T("profile_gemini_spinner")):
                             opinion = generate_gemini_expert_opinion(app, gemini_key)
                             st.session_state[opinion_key] = opinion
                     else:
-                        st.warning("Установите переменную GEMINI_API_KEY для работы LLM.")
+                        st.warning(T("profile_gemini_warn_key"))
 
             opinion_text = st.session_state.get(opinion_key)
             if opinion_text:
@@ -1447,10 +1435,10 @@ with tab3:
                         <span style="font-size:20px;">🤖</span>
                         <span style="font-family:'Montserrat',sans-serif; font-weight:700;
                              font-size:14px; color:{verdict_color};">
-                            Экспертное заключение — LLM
+                            {T('profile_gemini_label')}
                         </span>
                         <span style="font-size:11px; color:#aaa; margin-left:auto;">
-                            на основе Правил субсидирования МСХ РК (Приказ № 108)
+                            {T('profile_gemini_source')}
                         </span>
                     </div>
                     <div style="font-size:14px; line-height:1.8; color:#1a2340; white-space:pre-wrap;">{opinion_text}</div>
@@ -1462,14 +1450,10 @@ with tab3:
             with prof_col1:
                 raw_features = app.get("raw_features_used") or {}
                 pdf_ok = bool((app.get("documents_extracted_text") or "").strip())
-                st.markdown("#### 📈 Показатели и условная динамика")
-                st.caption(
-                    "Графики строятся по **числовым признакам**, переданным в модель скоринга "
-                    "(анкета заявки; при успешном разборе PDF — уточнённые значения). "
-                    "Это не внешняя бухгалтерская отчётность, а входные данные расчёта по заявке."
-                )
+                st.markdown(f"#### {T('profile_indicators_title')}")
+                st.caption(T("profile_indicators_caption"))
                 if pdf_ok:
-                    st.caption("📄 Для этой заявки сохранён текст PDF — он мог использоваться при извлечении признаков и в заключении LLM.")
+                    st.caption(T("profile_indicators_pdf_caption"))
 
                 import math as _math
                 prof = _normalized_profile_from_raw(raw_features)
@@ -1495,16 +1479,16 @@ with tab3:
                     hovertemplate="%{y}: %{customdata}<extra></extra>",
                 ))
                 fig_bars.update_layout(
-                    title="Ключевые показатели (нормализация 0–100 для сравнения)",
+                    title=T("profile_bar_title"),
                     height=max(280, len(bar_labels) * 28),
                     plot_bgcolor="#f8faff",
                     paper_bgcolor="#ffffff",
                     margin=dict(t=50, b=30, l=10, r=50),
                     font=dict(family="Golos Text", size=11),
-                    xaxis=dict(range=[0, 115], title="Шкала, б.н."),
+                    xaxis=dict(range=[0, 115], title=T("profile_bar_scale")),
                 )
                 if any(_math.isnan(prof[k]) for k in bar_labels):
-                    st.caption("⚠️ Серые столбцы — данные не были предоставлены в анкете и не найдены в PDF (отображено N/A).")
+                    st.caption(T("profile_indicators_na_caption"))
                 st.plotly_chart(fig_bars, use_container_width=True)
 
                 _yoy_raw = raw_features.get("gross_output_growth_yoy")
@@ -1516,28 +1500,28 @@ with tab3:
                 fig_yoy.add_trace(go.Scatter(
                     x=[cy - 1, cy],
                     y=[idx_prev, idx_curr],
-                    name="Условный индекс (база 100)",
+                    name=T("profile_yoy_index"),
                     line=dict(color="#003580", width=3),
                     mode="lines+markers",
                     marker=dict(size=10),
                 ))
                 fig_yoy.update_layout(
                     title=(
-                        "Условная динамика по росту валовой продукции (YoY из заявки)"
+                        T("profile_yoy_title")
                         if yoy_available
-                        else "Рост продукции: данные не предоставлены (N/A)"
+                        else T("profile_yoy_title_na")
                     ),
                     height=240,
                     plot_bgcolor="#f8faff",
                     paper_bgcolor="#ffffff",
                     margin=dict(t=50, b=30, l=40, r=20),
                     font=dict(family="Golos Text", size=11),
-                    yaxis_title="Индекс (условн.)",
-                    xaxis_title="Год",
+                    yaxis_title=T("profile_yoy_index_label"),
+                    xaxis_title=T("profile_yoy_year"),
                     showlegend=False,
                 )
                 if not yoy_available:
-                    st.caption("⚠️ gross_output_growth_yoy = N/A — показатель не был найден ни в анкете, ни в PDF.")
+                    st.caption(T("profile_yoy_na_caption"))
                 st.plotly_chart(fig_yoy, use_container_width=True)
 
                 radar_order = _radar_order_labels()
@@ -1553,7 +1537,7 @@ with tab3:
                     line=dict(color="#0072CE", width=2.5),
                 ))
                 fig_radar.update_layout(
-                    title="Профиль эффективности (те же данные, что в модели)",
+                    title=T("profile_radar_title"),
                     polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
                     height=340, paper_bgcolor="#ffffff",
                     font=dict(family="Golos Text", size=11),
@@ -1563,23 +1547,20 @@ with tab3:
 
             with prof_col2:
 
-                st.markdown("#### 🧠 Объяснение AI-решения (модель + SHAP)")
-                st.markdown("""
+                st.markdown(f"#### {T('profile_shap_title')}")
+                st.markdown(f"""
                 <div style="background:#f0f4ff; border:1px solid #dde3ef; border-radius:8px;
                      padding:10px 14px; font-size:12px; color:#6b7a99; margin-bottom:12px;">
-                    <b>Как это связано с PDF и скорингом:</b> балл считает <b>XGBoost</b> по числовым признакам заявки
-                    (часть значений может быть уточнена из текста PDF). <b>SHAP</b> показывает вклад каждого признака
-                    в итоговый балл. Ниже вклад переведён в шкалу <b>±20 баллов</b> относительно самого сильного фактора
-                    в этой заявке. Заключение <b>LLM</b> (кнопка выше) дополняет проверкой правил и контекстом PDF.
+                    {T('profile_shap_info')}
                 </div>
                 """, unsafe_allow_html=True)
                 _dc = int(app.get("documents_text_chars") or 0)
                 if _dc > 0:
-                    st.caption(f"Документы: извлечено {_dc} симв. текста из PDF (для compliance и уточнения признаков).")
+                    st.caption(T("profile_shap_doc_chars").format(chars=_dc))
                 elif app.get("documents_pdf_count", 0):
-                    st.caption("Документы: PDF загружались, но машиночитаемый текст не получен (возможны сканы).")
+                    st.caption(T("profile_shap_doc_count"))
                 else:
-                    st.caption("Документы: к этой записи файлы не прикреплялись или это тестовая заявка без вложений.")
+                    st.caption(T("profile_shap_doc_none"))
 
                 top_pos = app.get("top_positive_factors", [])
                 top_neg = app.get("top_negative_factors", [])
@@ -1617,7 +1598,7 @@ with tab3:
                         <summary class="shap-group-header">
                             <span class="group-emoji">{group['emoji']}</span>
                             <span>{group['label']}</span>
-                            <span class="group-count">{len(items)} факт. | Σ {group_sign}{_shap_to_display_points(group_total, max_abs, 20.0)} б.</span>
+                            <span class="group-count">{T('profile_shap_group_count').format(count=len(items), sign=group_sign, pts=_shap_to_display_points(group_total, max_abs, 20.0))}</span>
                         </summary>
                         <div class="shap-group-body">"""
 
@@ -1652,7 +1633,7 @@ with tab3:
                 if shap_html:
                     st.markdown(shap_html, unsafe_allow_html=True)
                 else:
-                    st.caption("SHAP-объяснения недоступны для этой заявки")
+                    st.caption(T("profile_shap_unavailable"))
 
                 if all_shap:
                     sorted_shap = sorted(all_shap.items(), key=lambda x: abs(float(x[1])), reverse=True)[:6]
@@ -1683,7 +1664,7 @@ with tab3:
                 st.divider()
                 _plot_score_summary_no_waterfall(app, score_ml)
 
-                st.markdown("#### 💼 Финансовая сводка")
+                st.markdown(f"#### {T('profile_financial_summary')}")
 
                 if compliance_bonus != 0:
                     bonus_cls = "pos" if compliance_bonus >= 0 else "neg"
@@ -1701,19 +1682,19 @@ with tab3:
                 st.markdown(f"""
                 <table style="width:100%; font-size:13px; border-collapse:collapse;">
                     <tr style="border-bottom:1px solid #eee;">
-                        <td style="padding:6px 4px; color:#888;">Запрошено</td>
+                        <td style="padding:6px 4px; color:#888;">{T('profile_fin_requested')}</td>
                         <td style="text-align:right; font-weight:700;">{_fmt_tenge(app.get('requested_amount',0))}</td>
                     </tr>
                     <tr style="border-bottom:1px solid #eee;">
-                        <td style="padding:6px 4px; color:#888;">Регион</td>
+                        <td style="padding:6px 4px; color:#888;">{T('profile_fin_region')}</td>
                         <td style="text-align:right;">{app.get('region','—')}</td>
                     </tr>
                     <tr style="border-bottom:1px solid #eee;">
-                        <td style="padding:6px 4px; color:#888;">Источник</td>
+                        <td style="padding:6px 4px; color:#888;">{T('profile_fin_source')}</td>
                         <td style="text-align:right;">{app.get('source_system','manual').upper()}</td>
                     </tr>
                     <tr>
-                        <td style="padding:6px 4px; color:#888;">Дата подачи</td>
+                        <td style="padding:6px 4px; color:#888;">{T('profile_fin_date')}</td>
                         <td style="text-align:right;">{app.get('application_date', app.get('calculated_at','')[:10])}</td>
                     </tr>
                 </table>
@@ -1722,7 +1703,7 @@ with tab3:
             compliance = app.get("compliance")
             if compliance:
                 st.markdown("---")
-                st.markdown("#### 📋 Проверка соответствия Правилам субсидирования (Приказ МСХ РК № 108)")
+                st.markdown(f"#### {T('profile_compliance_title')}")
 
                 c_status = compliance.get("overall_status", "")
                 c_score_pct = compliance.get("overall_score_pct", 0)
@@ -1732,14 +1713,17 @@ with tab3:
                 c_name = compliance.get("subsidy_name", "")
 
                 badge_cls = {
-                    "СООТВЕТСТВУЕТ": "badge-ok",
-                    "ЧАСТИЧНО": "badge-warn",
-                    "НЕ СООТВЕТСТВУЕТ": "badge-fail",
-                    "ДИСКВАЛИФИКАЦИЯ": "badge-disq",
+                    T("profile_compliance_status_match"): "badge-ok",
+                    T("profile_compliance_status_partial"): "badge-warn",
+                    T("profile_compliance_status_fail"): "badge-fail",
+                    T("profile_compliance_status_disq"): "badge-disq",
                 }.get(c_status, "badge-warn")
 
                 bonus_sign = "+" if c_bonus >= 0 else ""
                 bonus_color = "#1a7a4a" if c_bonus >= 0 else "#b5001f"
+
+                bonus_label = T("profile_compliance_bonus").format(sign=bonus_sign, bonus=f"{c_bonus:.1f}")
+                requirements_label = T("profile_compliance_requirements").format(pct=c_score_pct)
 
                 st.markdown(f"""
                 <div class="compliance-block">
@@ -1747,12 +1731,12 @@ with tab3:
                         <div>
                             <span class="compliance-title">📑 {c_name}</span>
                             <span style="font-size:12px; color:#888; margin-left:10px;">
-                                Выполнено {c_score_pct:.0f}% требований
+                                {requirements_label}
                             </span>
                         </div>
                         <div style="display:flex; align-items:center; gap:10px;">
                             <span style="font-size:13px; font-weight:700; color:{bonus_color};">
-                                {bonus_sign}{c_bonus:.1f} к баллу
+                                {bonus_label}
                             </span>
                             <span class="compliance-badge {badge_cls}">{c_status}</span>
                         </div>
@@ -1772,7 +1756,7 @@ with tab3:
                     <div style="background:#2d0010; border:1px solid #8b002a; border-radius:8px;
                          padding:12px 16px; margin-bottom:12px;">
                         <div style="color:#ff6b8a; font-weight:700; font-size:13px; margin-bottom:6px;">
-                            🚫 ДИСКВАЛИФИЦИРУЮЩИЕ УСЛОВИЯ — субсидия невозможна:
+                            {T('profile_compliance_disq_title')}
                         </div>
                         {''.join(f"<div style='color:#ffaaaa; font-size:12px; margin-top:4px;'>• {d}</div>" for d in c_disq)}
                     </div>
@@ -1793,14 +1777,14 @@ with tab3:
                             source = chk.get("source", "")
                             is_critical = chk.get("is_critical", False)
 
-                            if status == "ВЫПОЛНЕНО":
+                            if status == T("profile_compliance_check_done"):
                                 item_cls = "check-ok"
-                            elif status in ("ЧАСТИЧНО", "ПРЕДУПРЕЖДЕНИЕ"):
+                            elif status in (T("profile_compliance_status_partial"), T("profile_compliance_check_warn")):
                                 item_cls = "check-warn"
                             else:
                                 item_cls = "check-fail"
 
-                            critical_badge = '<span class="check-critical">КРИТИЧНО</span>' if is_critical else ""
+                            critical_badge = f'<span class="check-critical">{T("profile_compliance_critical")}</span>' if is_critical else ""
 
                             st.markdown(f"""
                             <div class="check-item {item_cls}">
@@ -1833,31 +1817,28 @@ with tab3:
                     """, unsafe_allow_html=True)
 
             elif app.get("documents_processed", 0) == 0:
-                st.markdown("""
+                st.markdown(f"""
                 <div style="background:#f8f8f8; border:1px dashed #ccc; border-radius:8px;
                      padding:14px 18px; margin-top:16px; font-size:13px; color:#888; text-align:center;">
-                    📎 Документы не загружены — проверка соответствия правилам недоступна.<br>
-                    Используйте эндпоинт <code>/api/v1/score-with-documents</code> для полного анализа.
+                    {T('profile_no_docs_compliance')}
                 </div>
                 """, unsafe_allow_html=True)
 
-            st.markdown("""
+            st.markdown(f"""
             <div class="hitl-block">
-                <div class="hitl-title">👤 Решение комиссии (Human-in-the-Loop)</div>
+                <div class="hitl-title">{T('profile_hitl_title')}</div>
                 <div class="hitl-desc">
-                    ИИ предоставляет рекомендацию, однако окончательное решение принимается уполномоченным
-                    сотрудником комиссии Министерства сельского хозяйства РК. Ваше решение будет зафиксировано
-                    в системе с указанием ФИО и временной меткой.
+                    {T('profile_hitl_desc')}
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
             hitl_col1, hitl_col2, hitl_col3 = st.columns([3, 1, 1])
             with hitl_col1:
-                comment = st.text_area("Комментарий (необязательно)", height=60,
+                comment = st.text_area(T("profile_hitl_comment"), height=60,
                                        key=f"comment_{selected_id}")
             with hitl_col2:
-                if st.button("✅ Одобрить выплату", type="primary",
+                if st.button(T("profile_hitl_approve"), type="primary",
                              key=f"approve_{selected_id}", use_container_width=True):
                     payload = {
                         "application_id": selected_id,
@@ -1867,11 +1848,11 @@ with tab3:
                     result = _api_post("/api/v1/decision", payload)
                     if result:
                         st.session_state.decisions[selected_id] = "approved"
-                        st.success(f"✅ Выплата одобрена. Зафиксировано в системе.")
+                        st.success(T("profile_hitl_approved"))
                         _refresh_apps()
                         st.rerun()
             with hitl_col3:
-                if st.button("❌ Отказать", type="secondary",
+                if st.button(T("profile_hitl_reject"), type="secondary",
                              key=f"reject_{selected_id}", use_container_width=True):
                     payload = {
                         "application_id": selected_id,
@@ -1881,32 +1862,32 @@ with tab3:
                     result = _api_post("/api/v1/decision", payload)
                     if result:
                         st.session_state.decisions[selected_id] = "rejected"
-                        st.warning("❌ Отказ зафиксирован в системе.")
+                        st.warning(T("profile_hitl_rejected"))
                         _refresh_apps()
                         st.rerun()
 
             current_decision = st.session_state.decisions.get(selected_id)
             if current_decision:
-                d_label = "✅ Одобрено" if current_decision == "approved" else "❌ Отказано"
+                d_label = T("all_apps_decision_approved") if current_decision == "approved" else T("all_apps_decision_rejected")
                 d_color = "#1a7a4a" if current_decision == "approved" else "#b5001f"
                 st.markdown(f"""
                 <div style="margin-top:12px; background:#f8f8f8; border:1px solid #ddd;
                      border-radius:8px; padding:10px 16px; font-size:13px; color:{d_color}; font-weight:700;">
-                    {d_label} — Решение зафиксировано: {datetime.now().strftime('%d.%m.%Y %H:%M')}
+                    {T('profile_hitl_decision_fixed').format(label=d_label, datetime=datetime.now().strftime('%d.%m.%Y %H:%M'))}
                 </div>
                 """, unsafe_allow_html=True)
 
 with tab4:
-    st.markdown("### 🔌 Интеграция API — Примеры запросов")
+    st.markdown(f"### {T('api_title')} — {T('api_subtitle')}")
 
-    st.markdown("""
+    st.markdown(f"""
     <div class="info-box">
-        <h4>📌 Базовая информация</h4>
+        <h4>{T('api_info_title')}</h4>
         <p style="font-size:14px; color:#444; line-height:1.7;">
-            <b>Base URL:</b> <code>http://localhost:8003</code><br>
-            <b>Авторизация:</b> API Key в заголовке <code>X-API-Key</code><br>
-            <b>Формат:</b> JSON<br>
-            <b>Rate Limit:</b> 1000 запросов/час
+            <b>{T('api_info_base')}</b> <code>http://localhost:8003</code><br>
+            <b>{T('api_info_auth')}</b> API Key в заголовке <code>X-API-Key</code><br>
+            <b>{T('api_info_format')}</b> JSON<br>
+            <b>{T('api_info_rate')}</b> 1000 запросов/час
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -1914,12 +1895,12 @@ with tab4:
     st.divider()
 
     # POST /api/v1/score
-    st.markdown("#### 1. POST /api/v1/score — Базовый скоринг")
-    st.caption("Расчёт скорингового балла по числовым данным")
+    st.markdown(f"#### {T('api_ep_score')}")
+    st.caption(T("api_ep_score_desc"))
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**Запрос:**")
+        st.markdown(T("api_request_label"))
         st.code("""curl -X POST http://localhost:8003/api/v1/score \\
   -H "Content-Type: application/json" \\
   -H "X-API-Key: sk-msgov-2025-demo-key-abc123" \\
@@ -1935,7 +1916,7 @@ with tab4:
   }'""", language="bash")
 
     with col2:
-        st.markdown("**Ответ:**")
+        st.markdown(T("api_response_label"))
         st.code("""{
   "application_id": "A7F2B1C0",
   "score_ml": 84.5,
@@ -1953,12 +1934,12 @@ with tab4:
     st.divider()
 
     # POST /api/v1/score-with-documents
-    st.markdown("#### 2. POST /api/v1/score-with-documents — Скоринг с документами")
-    st.caption("Скоринг + LLM-анализ PDF-документов + проверка правил")
+    st.markdown(f"#### {T('api_ep_score_docs')}")
+    st.caption(T("api_ep_score_docs_desc"))
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**Запрос:**")
+        st.markdown(T("api_request_label"))
         st.code("""curl -X POST http://localhost:8003/api/v1/score-with-documents \\
   -H "X-API-Key: sk-msgov-2025-demo-key-abc123" \\
   -F 'features_json={
@@ -1971,7 +1952,7 @@ with tab4:
   -F 'documents=@veterinary_cert.pdf'""", language="bash")
 
     with col2:
-        st.markdown("**Ответ:**")
+        st.markdown(T("api_response_label"))
         st.code("""{
   "application_id": "A7F2B1C0",
   "score_ml": 84.5,
@@ -1990,17 +1971,17 @@ with tab4:
     st.divider()
 
     # GET /api/v1/applications
-    st.markdown("#### 3. GET /api/v1/applications — Список заявок")
-    st.caption("Получение списка всех заявок (сортировка по баллу)")
+    st.markdown(f"#### {T('api_ep_apps')}")
+    st.caption(T("api_ep_apps_desc"))
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**Запрос:**")
+        st.markdown(T("api_request_label"))
         st.code("""curl "http://localhost:8003/api/v1/applications?zone=green&min_score=80" \\
   -H "X-API-Key: sk-msgov-2025-demo-key-abc123" """, language="bash")
 
     with col2:
-        st.markdown("**Ответ:**")
+        st.markdown(T("api_response_label"))
         st.code("""[
   {
     "application_id": "A7F2B1C0",
@@ -2023,12 +2004,12 @@ with tab4:
     st.divider()
 
     # POST /api/v1/decision
-    st.markdown("#### 4. POST /api/v1/decision — Решение комиссии")
-    st.caption("Фиксация решения комиссии (Human-in-the-Loop)")
+    st.markdown(f"#### {T('api_ep_decision')}")
+    st.caption(T("api_ep_decision_desc"))
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**Запрос:**")
+        st.markdown(T("api_request_label"))
         st.code("""curl -X POST http://localhost:8003/api/v1/decision \\
   -H "Content-Type: application/json" \\
   -H "X-API-Key: sk-msgov-2025-demo-key-abc123" \\
@@ -2039,7 +2020,7 @@ with tab4:
   }'""", language="bash")
 
     with col2:
-        st.markdown("**Ответ:**")
+        st.markdown(T("api_response_label"))
         st.code("""{
   "status": "success",
   "application_id": "A7F2B1C0",
@@ -2052,17 +2033,17 @@ with tab4:
     st.divider()
 
     # POST /api/v1/giss/sync
-    st.markdown("#### 5. POST /api/v1/giss/sync — Тестовые заявки")
-    st.caption("Синхронизация тестовых заявок (демо-режим)")
+    st.markdown(f"#### {T('api_ep_sync')}")
+    st.caption(T("api_ep_sync_desc"))
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**Запрос:**")
+        st.markdown(T("api_request_label"))
         st.code("""curl -X POST http://localhost:8003/api/v1/giss/sync \\
   -H "X-API-Key: sk-msgov-2025-demo-key-abc123" """, language="bash")
 
     with col2:
-        st.markdown("**Ответ:**")
+        st.markdown(T("api_response_label"))
         st.code("""{
   "status": "success",
   "synced_count": 15,
@@ -2072,29 +2053,27 @@ with tab4:
     st.divider()
 
     # Таблица зон скоринга
-    st.markdown("#### 📊 Зоны скоринга")
+    st.markdown(f"#### {T('api_zones_title')}")
 
     zones_data = {
-        "Зона": ["🟢 green", "🟡 yellow", "🔴 red"],
-        "Диапазон баллов": ["80–100", "50–79", "0–49"],
-        "Рекомендация": [
-            "Строго рекомендовано",
-            "Рассмотрение комиссией",
-            "Не рекомендовано"
+        T("api_zones_zone"): ["🟢 green", "🟡 yellow", "🔴 red"],
+        T("api_zones_range"): ["80–100", "50–79", "0–49"],
+        T("api_zones_rec"): [
+            T("api_zones_green_rec"),
+            T("api_zones_yellow_rec"),
+            T("api_zones_red_rec")
         ],
-        "Вероятность одобрения": [
-            "Высокая (>90%)",
-            "Средняя (40–60%)",
-            "Низкая (<10%)"
+        T("api_zones_prob"): [
+            T("api_zones_green_prob"),
+            T("api_zones_yellow_prob"),
+            T("api_zones_red_prob")
         ],
     }
     st.dataframe(pd.DataFrame(zones_data), hide_index=True, use_container_width=True)
 
 st.divider()
-st.markdown("""
+st.markdown(f"""
 <div style="text-align:center; font-size:12px; color:#9aacce; padding:10px 0;">
-    SmartAgro Score v2.0 | Министерство сельского хозяйства РК |
-    Decentrathon 5.0 — AI for Government |
-    ИИ предоставляет рекомендацию, финальное решение принимается комиссией
+    {T('footer')}
 </div>
 """, unsafe_allow_html=True)

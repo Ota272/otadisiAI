@@ -1,5 +1,5 @@
 """
-Генератор PDF-документов для субсидий МСХ РК
+Генератор PDF-документов для субсидий МСХ РК / МСХ РК субсидияларына арналған PDF құжаттар генераторы
 Генерирует документы от "отлично" до "плохо" с реалистичными данными,
 которые приводят к соответствующему скору.
 """
@@ -11,6 +11,11 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 import numpy as np
+
+# ═══════════════════════════════════════════════════════
+# ЯЗЫК / ТІЛ
+# ═══════════════════════════════════════════════════════
+LANGUAGE = "ru"  # "ru" или "kz" — меняется в main()
 
 # ── Регистрация шрифта ──
 try:
@@ -36,63 +41,116 @@ except ImportError:
     print("❌ reportlab не установлен: pip install reportlab")
     sys.exit(1)
 
-# ── Справочники ──
-REGIONS = [
-    "Акмолинская область", "Алматинская область", "Атырауская область",
-    "Восточно-Казахстанская область", "Жамбылская область",
-    "Карагандинская область", "Костанайская область",
-    "Кызылординская область", "Мангистауская область",
-    "Павлодарская область", "Северо-Казахстанская область",
-    "Туркестанская область", "Западно-Казахстанская область",
-    "Актюбинская область", "область Ұлытау", "область Жетісу", "г.Шымкент",
-]
+# ═══════════════════════════════════════════════════════
+# СПРАВОЧНИКИ / АНЫҚТАМАЛЫҚТАР
+# ═══════════════════════════════════════════════════════
+REGIONS = {
+    "ru": [
+        "Акмолинская область", "Алматинская область", "Атырауская область",
+        "Восточно-Казахстанская область", "Жамбылская область",
+        "Карагандинская область", "Костанайская область",
+        "Кызылординская область", "Мангистауская область",
+        "Павлодарская область", "Северо-Казахстанская область",
+        "Туркестанская область", "Западно-Казахстанская область",
+        "Актюбинская область", "область Ұлытау", "область Жетісу", "г.Шымкент",
+    ],
+    "kz": [
+        "Ақмола облысы", "Алматы облысы", "Атырау облысы",
+        "Шығыс Қазақстан облысы", "Жамбыл облысы",
+        "Қарағанды облысы", "Қостанай облысы",
+        "Қызылорда облысы", "Маңғыстау облысы",
+        "Павлодар облысы", "Солтүстік Қазақстан облысы",
+        "Түркістан облысы", "Батыс Қазақстан облысы",
+        "Ақтөбе облысы", "Ұлытау облысы", "Жетісу облысы", "Шымкент қ.",
+    ],
+}
 
-DIRECTIONS = [
-    "Субсидирование в скотоводстве",
-    "Субсидирование в овцеводстве",
-    "Субсидирование в коневодстве",
-    "Субсидирование в птицеводстве",
-    "Субсидирование в верблюдоводстве",
-]
+DIRECTIONS = {
+    "ru": [
+        "Субсидирование в скотоводстве",
+        "Субсидирование в овцеводстве",
+        "Субсидирование в коневодстве",
+        "Субсидирование в птицеводстве",
+        "Субсидирование в верблюдоводстве",
+    ],
+    "kz": [
+        "Мал шаруашылығын субсидиялау",
+        "Қой шаруашылығын субсидиялау",
+        "Жылқы шаруашылығын субсидиялау",
+        "Құс шаруашылығын субсидиялау",
+        "Түйе шаруашылығын субсидиялау",
+    ],
+}
 
 DIRECTION_CODES = {
-    "Субсидирование в скотоводстве": 0,
-    "Субсидирование в овцеводстве": 1,
-    "Субсидирование в коневодстве": 2,
-    "Субсидирование в птицеводстве": 3,
-    "Субсидирование в верблюдоводстве": 4,
+    "ru": {d: i for i, d in enumerate(DIRECTIONS["ru"])},
+    "kz": {d: i for i, d in enumerate(DIRECTIONS["kz"])},
 }
 
 SUBSIDY_NAMES = {
-    "Субсидирование в скотоводстве": [
-        "Приобретение племенного маточного поголовья КРС",
-        "Приобретение племенных быков-производителей КРС",
-        "Удешевление стоимости производства молока",
-    ],
-    "Субсидирование в овцеводстве": [
-        "Приобретение племенных баранов-производителей",
-        "Субсидирование затрат по реализации продукции овцеводства",
-    ],
-    "Субсидирование в коневодстве": [
-        "Приобретение племенных жеребцов-производителей",
-        "Субсидирование затрат по реализации продукции коневодства",
-    ],
-    "Субсидирование в птицеводстве": [
-        "Субсидирование затрат по производству мяса птицы",
-        "Субсидирование затрат по производству яиц",
-    ],
-    "Субсидирование в верблюдоводстве": [
-        "Приобретение племенных верблюдов-производителей",
-        "Субсидирование затрат по реализации продукции верблюдоводства",
-    ],
+    "ru": {
+        "Субсидирование в скотоводстве": [
+            "Приобретение племенного маточного поголовья КРС",
+            "Приобретение племенных быков-производителей КРС",
+            "Удешевление стоимости производства молока",
+        ],
+        "Субсидирование в овцеводстве": [
+            "Приобретение племенных баранов-производителей",
+            "Субсидирование затрат по реализации продукции овцеводства",
+        ],
+        "Субсидирование в коневодстве": [
+            "Приобретение племенных жеребцов-производителей",
+            "Субсидирование затрат по реализации продукции коневодства",
+        ],
+        "Субсидирование в птицеводстве": [
+            "Субсидирование затрат по производству мяса птицы",
+            "Субсидирование затрат по производству яиц",
+        ],
+        "Субсидирование в верблюдоводстве": [
+            "Приобретение племенных верблюдов-производителей",
+            "Субсидирование затрат по реализации продукции верблюдоводства",
+        ],
+    },
+    "kz": {
+        "Мал шаруашылығын субсидиялау": [
+            "Тұқымдық ірі қара мал аналық басын сатып алу",
+            "Тұқымдық бұқа-өндірушілерді сатып алу",
+            "Сүт өндірісі құнын арзандату",
+        ],
+        "Қой шаруашылығын субсидиялау": [
+            "Тұқымдық қошқар-өндірушілерді сатып алу",
+            "Қой шаруашылығы өнімін өткізу шығындарын субсидиялау",
+        ],
+        "Жылқы шаруашылығын субсидиялау": [
+            "Тұқымдық айғыр-өндірушілерді сатып алу",
+            "Жылқы шаруашылығы өнімін өткізу шығындарын субсидиялау",
+        ],
+        "Құс шаруашылығын субсидиялау": [
+            "Құс еті өндірісі шығындарын субсидиялау",
+            "Жұмыртқа өндірісі шығындарын субсидиялау",
+        ],
+        "Түйе шаруашылығын субсидиялау": [
+            "Тұқымдық түйе-өндірушілерді сатып алу",
+            "Түйе шаруашылығы өнімін өткізу шығындарын субсидиялау",
+        ],
+    },
 }
 
 NORMATIVE_MAP = {
-    "Приобретение племенного маточного поголовья КРС": 260_000,
-    "Приобретение племенных быков-производителей КРС": 260_000,
-    "Удешевление стоимости производства молока": 45,
-    "Приобретение племенных баранов-производителей": 100_000,
-    "Приобретение племенных жеребцов-производителей": 150_000,
+    "ru": {
+        "Приобретение племенного маточного поголовья КРС": 260_000,
+        "Приобретение племенных быков-производителей КРС": 260_000,
+        "Удешевление стоимости производства молока": 45,
+        "Приобретение племенных баранов-производителей": 100_000,
+        "Приобретение племенных жеребцов-производителей": 150_000,
+    },
+    "kz": {
+        "Тұқымдық ірі қара мал аналық басын сатып алу": 260_000,
+        "Тұқымдық бұқа-өндірушілерді сатып алу": 260_000,
+        "Сүт өндірісі құнын арзандату": 45,
+        "Тұқымдық қошқар-өндірушілерді сатып алу": 100_000,
+        "Тұқымдық айғыр-өндірушілерді сатып алу": 150_000,
+    },
 }
 
 COMPANY_PREFIXES = ["Агро", "Плем", "Эталон", "Сарыарка", "Дала", "Береке", "Нур", "Астана"]
@@ -101,13 +159,16 @@ COMPANY_SUFFIXES = ["Элита", "Астык", "Мал", "Егiн", "Фарм",
 # ── Сценарии генерации ──
 SCENARIOS = {
     "excellent": {
-        "label": "ОТЛИЧНО (85-100 баллов)",
+        "label": {"ru": "ОТЛИЧНО (85-100 баллов)", "kz": "ӨТЕ ЖАҚСЫ (85-100 балл)"},
         "heads_range": (120, 250),
         "price_per_head_range": (850_000, 1_100_000),
         "pasture_per_head_range": (12.0, 20.0),
         "debt_to_ebitda_range": (0.0, 0.8),
         "vet_health_pct_range": (96, 100),
-        "payment_status": "ИСПОЛНЕНО. Оплата произведена в полном объеме в установленный срок.",
+        "payment_status": {
+            "ru": "ИСПОЛНЕНО. Оплата произведена в полном объеме в установленный срок.",
+            "kz": "ОРЫНДАЛДЫ. Төлем толық көлемде белгіленген мерзімде жүргізілді.",
+        },
         "payment_pct": 100,
         "gross_growth_range": (0.15, 0.45),
         "survival_rate_range": (0.92, 0.98),
@@ -128,13 +189,16 @@ SCENARIOS = {
         "has_bin_iin": True,
     },
     "good": {
-        "label": "ХОРОШО (65-84 балла)",
+        "label": {"ru": "ХОРОШО (65-84 балла)", "kz": "ЖАҚСЫ (65-84 балл)"},
         "heads_range": (80, 150),
         "price_per_head_range": (700_000, 950_000),
         "pasture_per_head_range": (8.0, 14.0),
         "debt_to_ebitda_range": (0.5, 2.0),
         "vet_health_pct_range": (88, 96),
-        "payment_status": "ИСПОЛНЕНО. Оплата произведена.",
+        "payment_status": {
+            "ru": "ИСПОЛНЕНО. Оплата произведена.",
+            "kz": "ОРЫНДАЛДЫ. Төлем жүргізілді.",
+        },
         "payment_pct": 100,
         "gross_growth_range": (0.05, 0.20),
         "survival_rate_range": (0.85, 0.93),
@@ -155,13 +219,16 @@ SCENARIOS = {
         "has_bin_iin": True,
     },
     "average": {
-        "label": "СРЕДНЕ (45-64 балла)",
+        "label": {"ru": "СРЕДНЕ (45-64 балла)", "kz": "ОРТАША (45-64 балл)"},
         "heads_range": (40, 90),
         "price_per_head_range": (500_000, 750_000),
         "pasture_per_head_range": (5.0, 9.0),
         "debt_to_ebitda_range": (1.5, 3.5),
         "vet_health_pct_range": (75, 89),
-        "payment_status": "ЧАСТИЧНО. Оплата произведена на 60%.",
+        "payment_status": {
+            "ru": "ЧАСТИЧНО. Оплата произведена на 60%.",
+            "kz": "ІШІНАРА. Төлем 60% көлемінде жүргізілді.",
+        },
         "payment_pct": 60,
         "gross_growth_range": (-0.05, 0.10),
         "survival_rate_range": (0.75, 0.86),
@@ -182,13 +249,16 @@ SCENARIOS = {
         "has_bin_iin": True,
     },
     "poor": {
-        "label": "ПЛОХО (15-44 балла)",
+        "label": {"ru": "ПЛОХО (15-44 балла)", "kz": "НАШАР (15-44 балл)"},
         "heads_range": (10, 45),
         "price_per_head_range": (300_000, 550_000),
         "pasture_per_head_range": (2.0, 5.5),
         "debt_to_ebitda_range": (3.0, 5.0),
         "vet_health_pct_range": (50, 76),
-        "payment_status": "НЕ ИСПОЛНЕНО. Оплата не произведена. Задолженность.",
+        "payment_status": {
+            "ru": "НЕ ИСПОЛНЕНО. Оплата не произведена. Задолженность.",
+            "kz": "ОРЫНДАЛМАДЫ. Төлем жүргізілмеді. Берешек.",
+        },
         "payment_pct": 0,
         "gross_growth_range": (-0.25, 0.0),
         "survival_rate_range": (0.55, 0.76),
@@ -221,16 +291,19 @@ def _rand(rng):
 
 def generate_scenario_data(scenario_key: str, seed: int | None = None):
     """Генерирует полный набор данных для сценария."""
+    global LANGUAGE
+    lang = LANGUAGE
+
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
 
     sc = SCENARIOS[scenario_key]
 
-    region = random.choice(REGIONS)
-    direction = random.choice(DIRECTIONS)
-    subsidy_name = random.choice(SUBSIDY_NAMES[direction])
-    normative = NORMATIVE_MAP.get(subsidy_name, 150_000)
+    region = random.choice(REGIONS[lang])
+    direction = random.choice(DIRECTIONS[lang])
+    subsidy_name = random.choice(SUBSIDY_NAMES[lang][direction])
+    normative = NORMATIVE_MAP[lang].get(subsidy_name, 150_000)
 
     heads = _rand(sc["heads_range"])
     price_per_head = _rand(sc["price_per_head_range"])
@@ -263,29 +336,50 @@ def generate_scenario_data(scenario_key: str, seed: int | None = None):
     mortality_risk = round(_rand(sc["mortality_risk_range"]), 3)
 
     # Ветеринарный статус — текстовое описание
+    VET_TEXT = {
+        "ru": {
+            "excellent": "100%. Инфекционных заболеваний не выявлено. Хозяйство благополучно по всем заболеваниям.",
+            "good": "{pct}%. Требуется плановая вакцинация. Карантинных мероприятий нет.",
+            "average": [
+                "Выявлены единичные случаи мастита. Требуется лечение.",
+                "Плановая вакцинация не завершена. Карантин на 2 участках.",
+                "{pct}%. Обнаружены случаи респираторных заболеваний."
+            ],
+            "poor": [
+                "{pct}%. Обнаружены случаи бруцеллеза. Хозяйство на карантине.",
+                "{pct}%. Массовый падеж. Ветеринарный паспорт не оформлен.",
+                "{pct}%. Критическая ситуация. Множественные инфекционные заболевания."
+            ],
+        },
+        "kz": {
+            "excellent": "100%. Жұқпалы аурулар анықталмады. Шаруашылық барлық аурулар бойынша благополучный.",
+            "good": "{pct}%. Жоспарлы вакцинация қажет. Карантиндік шаралар жоқ.",
+            "average": [
+                "Маститтің жеке жағдайлары анықталды. Емдеу қажет.",
+                "Жоспарлы вакцинация аяқталмады. 2 учаскеде карантин.",
+                "{pct}%. Респираторлық аурулар жағдайлары анықталды."
+            ],
+            "poor": [
+                "{pct}%. Бруцеллез жағдайлары анықталды. Шаруашылық карантинде.",
+                "{pct}%. Жаппай қырылу. Ветеринарлық паспорт ресімделмеген.",
+                "{pct}%. Сыни жағдай. Көптеген жұқпалы аурулар."
+            ],
+        },
+    }
+    vt = VET_TEXT[lang]
     if scenario_key == "excellent":
-        vet_text = "100%. Инфекционных заболеваний не выявлено. Хозяйство благополучно по всем заболеваниям."
+        vet_text = vt["excellent"]
     elif scenario_key == "good":
-        vet_text = f"{vet_pct:.0f}%. Требуется плановая вакцинация. Карантинных мероприятий нет."
+        vet_text = vt["good"].format(pct=int(vet_pct))
     elif scenario_key == "average":
-        issues = random.choice([
-            "Выявлены единичные случаи мастита. Требуется лечение.",
-            "Плановая вакцинация не завершена. Карантин на 2 участках.",
-            f"{vet_pct:.0f}%. Обнаружены случаи респираторных заболеваний."
-        ])
-        vet_text = issues
+        vet_text = random.choice(vt["average"]).format(pct=int(vet_pct))
     else:  # poor
-        issues = random.choice([
-            f"{vet_pct:.0f}%. Обнаружены случаи бруцеллеза. Хозяйство на карантине.",
-            f"{vet_pct:.0f}%. Массовый падеж. Ветеринарный паспорт не оформлен.",
-            f"{vet_pct:.0f}%. Критическая ситуация. Множественные инфекционные заболевания."
-        ])
-        vet_text = issues
+        vet_text = random.choice(vt["poor"]).format(pct=int(vet_pct))
 
     data = {
         # Основные
         "scenario_key": scenario_key,
-        "scenario_label": sc["label"],
+        "scenario_label": sc["label"][lang],
         "region": region,
         "direction": direction,
         "subsidy_name": subsidy_name,
@@ -306,7 +400,7 @@ def generate_scenario_data(scenario_key: str, seed: int | None = None):
         "debt_ebitda": debt_ebitda,
         "vet_pct": vet_pct,
         "vet_text": vet_text,
-        "payment_status": sc["payment_status"],
+        "payment_status": sc["payment_status"][lang],
         "payment_pct": sc["payment_pct"],
         # ML-фичи
         "gross_output_growth_yoy": gross_growth,
@@ -322,9 +416,9 @@ def generate_scenario_data(scenario_key: str, seed: int | None = None):
         "natural_loss_risk_score": mortality_risk,
         "livestock_count": heads,
         "log_amount": float(np.log1p(total_sum)),
-        "direction_code": DIRECTION_CODES[direction],
-        "is_pedigree": 1 if "племен" in subsidy_name.lower() else 0,
-        "is_producer": 1 if "производит" in subsidy_name.lower() else 0,
+        "direction_code": DIRECTION_CODES[lang][direction],
+        "is_pedigree": 1 if "племен" in subsidy_name.lower() or "тұқымдық" in subsidy_name.lower() else 0,
+        "is_producer": 1 if "производит" in subsidy_name.lower() or "өндіруші" in subsidy_name.lower() else 0,
         # Документы
         "has_vet_certificate": sc["has_vet_certificate"],
         "has_breeding_cert": sc["has_breeding_cert"],
@@ -359,14 +453,12 @@ def _get_scoring_engine():
 
 
 def predict_score(data: dict) -> dict:
-    """
-    Предсказание скора через реальную XGBoost модель.
-    Fallback: упрощённая формула если модель не загружена.
-    """
+    """Предсказание скора через реальную XGBoost модель."""
+    global LANGUAGE
+    lang = LANGUAGE
     engine = _get_scoring_engine()
 
     if engine is not None:
-        # Реальный скоринг через XGBoost
         feature_dict = {
             "gross_output_growth_yoy": data["gross_output_growth_yoy"],
             "land_to_livestock_ratio": data["land_to_livestock_ratio"],
@@ -387,25 +479,39 @@ def predict_score(data: dict) -> dict:
             "hour_submitted": 12.0,
             "month_submitted": 4.0,
             "region_encoded": 0.0,
+            "language_code": 1.0 if lang == "kz" else 0.0,
         }
-        result = engine.score_farmer(feature_dict, include_shap=True)
+        result = engine.score_farmer(feature_dict, lang=lang, include_shap=True)
 
-        # Разбивка по компонентам из SHAP
+        LABEL_MAP = {
+            "ru": {
+                "gross_output_growth_yoy": "Рост валовой продукции",
+                "pedigree_ratio": "Доля племенного поголовья",
+                "historical_survival_rate": "Сохранность поголовья",
+                "veterinary_compliance": "Ветеринарное соответствие",
+                "subsidy_dependence_index": "Независимость от субсидий",
+                "debt_load_ratio": "Долговая нагрузка (инверт.)",
+                "grazing_norm_deviation": "Отклонение пастбищ от нормы",
+                "natural_loss_risk_score": "Риск аномальной смертности",
+                "land_to_livestock_ratio": "Обеспеченность пастбищами",
+                "years_in_operation": "Стаж работы",
+            },
+            "kz": {
+                "gross_output_growth_yoy": "Жалпы өнімнің өсуі",
+                "pedigree_ratio": "Тұқымдық мал үлесі",
+                "historical_survival_rate": "Мал сақталуы",
+                "veterinary_compliance": "Ветеринарлық сәйкестік",
+                "subsidy_dependence_index": "Субсидияға тәуелділік",
+                "debt_load_ratio": "Борыш жүктемесі (кері)",
+                "grazing_norm_deviation": "Жайылым ауытқуы",
+                "natural_loss_risk_score": "Аномалды өлім қаупі",
+                "land_to_livestock_ratio": "Жайылыммен қамтамасыз ету",
+                "years_in_operation": "Жұмыс стажы",
+            },
+        }
         components = {}
         shap_all = result.get("all_shap_values", {})
-        label_map = {
-            "gross_output_growth_yoy": "Рост валовой продукции",
-            "pedigree_ratio": "Доля племенного поголовья",
-            "historical_survival_rate": "Сохранность поголовья",
-            "veterinary_compliance": "Ветеринарное соответствие",
-            "subsidy_dependence_index": "Независимость от субсидий",
-            "debt_load_ratio": "Долговая нагрузка (инверт.)",
-            "grazing_norm_deviation": "Отклонение пастбищ от нормы",
-            "natural_loss_risk_score": "Риск аномальной смертности",
-            "land_to_livestock_ratio": "Обеспеченность пастбищами",
-            "years_in_operation": "Стаж работы",
-        }
-        for feat, label in label_map.items():
+        for feat, label in LABEL_MAP[lang].items():
             val = shap_all.get(feat, 0.0)
             components[label] = round(val, 1)
 
@@ -418,12 +524,14 @@ def predict_score(data: dict) -> dict:
             "method": "XGBoost",
         }
 
-    # Fallback: упрощённая формула
     return _predict_score_fallback(data)
 
 
 def _predict_score_fallback(data: dict) -> dict:
     """Упрощённое предсказание если XGBoost не доступен."""
+    global LANGUAGE
+    lang = LANGUAGE
+
     def norm_val(val, low, high):
         rng = high - low
         if rng <= 0:
@@ -457,12 +565,52 @@ def _predict_score_fallback(data: dict) -> dict:
     score = max(1.0, min(100.0, raw_score + random.gauss(0, 2)))
     score = round(score, 1)
 
+    VERDICTS = {
+        "ru": {
+            "green": ("GREEN", "🟢", "Строго рекомендовано"),
+            "yellow": ("YELLOW", "🟡", "Требует рассмотрения"),
+            "red": ("RED", "🔴", "Не рекомендовано"),
+        },
+        "kz": {
+            "green": ("GREEN", "🟢", "Қатаң түрде ұсынылады"),
+            "yellow": ("YELLOW", "🟡", "Қосымша қарау қажет"),
+            "red": ("RED", "🔴", "Ұсынылмайды"),
+        },
+    }
     if score >= 80:
-        zone, zone_emoji, verdict = "GREEN", "🟢", "Строго рекомендовано"
+        zone, zone_emoji, verdict = VERDICTS[lang]["green"]
     elif score >= 50:
-        zone, zone_emoji, verdict = "YELLOW", "🟡", "Требует рассмотрения"
+        zone, zone_emoji, verdict = VERDICTS[lang]["yellow"]
     else:
-        zone, zone_emoji, verdict = "RED", "🔴", "Не рекомендовано"
+        zone, zone_emoji, verdict = VERDICTS[lang]["red"]
+
+    COMPONENT_LABELS = {
+        "ru": {
+            "gross": "Рост валовой продукции",
+            "pedigree": "Доля племенного поголовья",
+            "survival": "Сохранность поголовья",
+            "vet": "Ветеринарное соответствие",
+            "subsidy": "Независимость от субсидий",
+            "debt": "Долговая нагрузка (инверт.)",
+            "grazing": "Отклонение пастбищ от нормы",
+            "risk": "Риск аномальной смертности",
+            "land": "Обеспеченность пастбищами",
+            "years": "Стаж работы",
+        },
+        "kz": {
+            "gross": "Жалпы өнімнің өсуі",
+            "pedigree": "Тұқымдық мал үлесі",
+            "survival": "Мал сақталуы",
+            "vet": "Ветеринарлық сәйкестік",
+            "subsidy": "Субсидияға тәуелділік",
+            "debt": "Борыш жүктемесі (кері)",
+            "grazing": "Жайылым ауытқуы",
+            "risk": "Аномалды өлім қаупі",
+            "land": "Жайылыммен қамтамасыз ету",
+            "years": "Жұмыс стажы",
+        },
+    }
+    lbl = COMPONENT_LABELS[lang]
 
     return {
         "predicted_score": score,
@@ -470,16 +618,16 @@ def _predict_score_fallback(data: dict) -> dict:
         "zone_emoji": zone_emoji,
         "verdict": verdict,
         "components": {
-            "Рост валовой продукции": round(gross_norm * 22, 1),
-            "Доля племенного поголовья": round(pedigree_norm * 18, 1),
-            "Сохранность поголовья": round(survival_norm * 13, 1),
-            "Ветеринарное соответствие": round(vet_norm * 11, 1),
-            "Независимость от субсидий": round(subsidy_indep * 10, 1),
-            "Долговая нагрузка (инверт.)": round(debt_indep * 9, 1),
-            "Отклонение пастбищ от нормы": round(grazing_norm * 5, 1),
-            "Риск аномальной смертности": round(risk_indep * 4, 1),
-            "Обеспеченность пастбищами": round(land_norm * 4, 1),
-            "Стаж работы": round(years_norm * 4, 1),
+            lbl["gross"]: round(gross_norm * 22, 1),
+            lbl["pedigree"]: round(pedigree_norm * 18, 1),
+            lbl["survival"]: round(survival_norm * 13, 1),
+            lbl["vet"]: round(vet_norm * 11, 1),
+            lbl["subsidy"]: round(subsidy_indep * 10, 1),
+            lbl["debt"]: round(debt_indep * 9, 1),
+            lbl["grazing"]: round(grazing_norm * 5, 1),
+            lbl["risk"]: round(risk_indep * 4, 1),
+            lbl["land"]: round(land_norm * 4, 1),
+            lbl["years"]: round(years_norm * 4, 1),
         },
         "method": "fallback",
     }
@@ -502,6 +650,8 @@ def create_pdf(filename: str, content: str):
 
 def generate_documents_for_scenario(data: dict) -> list[str]:
     """Генерирует 5 PDF-документов для сценария."""
+    global LANGUAGE
+    lang = LANGUAGE
     d = data
     docs = {}
 
@@ -513,104 +663,289 @@ def generate_documents_for_scenario(data: dict) -> list[str]:
 
     completeness = d["doc_completeness"]
 
+    # ── Тексты для PDF ──
+    T = {
+        "ru": {
+            "contract_title": "ДОГОВОР КУПЛИ-ПРОДАЖИ",
+            "city": "г. Кокшетау",
+            "seller": "Продавец",
+            "buyer": "Покупатель",
+            "subject": "ПРЕДМЕТ ДОГОВОРА",
+            "subject_text": "Продавец передает поголовье КРС.",
+            "subject_text_full": "Продавец передает племенное маточное поголовье КРС.",
+            "quantity": "Количество",
+            "heads": "голов",
+            "gender_age": "Половозрастная группа: телки.",
+            "breed": "Порода: казахская белоголовая.",
+            "breed_mix": "Порода: смешанная.",
+            "age": "Возраст: 8-14 месяцев.",
+            "sum_calc": "СУММА И РАСЧЕТЫ",
+            "price_head": "Стоимость головы",
+            "total_sum": "Общая сумма",
+            "debt_load": "Кредитная нагрузка (Долг/EBITDA)",
+            "growth": "Рост валовой продукции",
+            "obligations": "ОБЯЗАТЕЛЬСТВА СТОРОН",
+            "oblig_text": "Покупатель обязуется использовать поголовье по целевому назначению для воспроизводства стада в течение не менее 2 (двух) лет.",
+            "oblig_text_short": "Покупатель обязуется использовать поголовье по целевому назначению.",
+            "party1": "Сторона 1",
+            "party2": "Сторона 2",
+            "payment": "Оплата",
+            "not_paid": "не произведена. Задолженность.",
+            "survival": "Сохранность стада",
+            "vet_compl": "Ветеринарное соответствие",
+            "pedigree_share": "Доля племенного поголовья",
+            "growth_prod": "Рост валовой продукции",
+            "work_exp": "Стаж работы",
+            "years": "лет",
+            "subsidy_dep": "Зависимость от субсидий",
+            "prev_subsidies": "Ранее получено субсидий",
+            "copy_doc": "Копия документа",
+            "params": "Параметры",
+            "payment_title": "ПЛАТЕЖНОЕ ПОРУЧЕНИЕ",
+            "sender": "Отправитель",
+            "receiver": "Получатель",
+            "sum_label": "Сумма",
+            "purpose": "Назначение",
+            "payment_for": "Оплата за КРС",
+            "payment_for_contract": "Оплата по дог.",
+            "status": "Статус",
+            "not_executed": "НЕ ИСПОЛНЕНО. Задолженность.",
+            "not_paid_full": "оплата не произведена.",
+            "of_total": "от общей суммы",
+            "spravka_title": "СПРАВКА-ПОДТВЕРЖДЕНИЕ ИЗ ИНФОРМАЦИОННЫХ СИСТЕМ",
+            "spravka_short": "СПРАВКА-ПОДТВЕРЖДЕНИЕ",
+            "spravka_min": "СПРАВКА",
+            "issued_to": "Выдана",
+            "confirmed_heads": "Подтверждено голов",
+            "units": "ед.",
+            "reg_iszh": "Регистрация в ИСЖ и ИБСПР",
+            "registered": "ЗАРЕГИСТРИРОВАНО",
+            "vet_passport": "Ветеринарный паспорт",
+            "issued_doc": "ОФОРМЛЕН",
+            "vet_welfare": "Ветеринарное благополучие",
+            "land_cadastre": "Земельный кадастр",
+            "available": "имеется",
+            "pasture_supply": "Обеспеченность пастбищами",
+            "ha_head": "Га/голову",
+            "norm_dev": "Отклонение от нормы нагрузки",
+            "mortality_risk": "Риск аномальной смертности",
+            "farm_status": "Статус хозяйства",
+            "active": "действующее",
+            "no_info": "информация не предоставлена",
+            "esf_title": "ЭЛЕКТРОННАЯ СЧЕТ-ФАКТУРА",
+            "esf_short": "СЧЕТ-ФАКТУРА",
+            "esf_min": "ДОКУМЕНТ",
+            "date_issue": "Дата выписки",
+            "date_label": "Дата",
+            "supplier": "Поставщик",
+            "goods": "Товар",
+            "cattle": "КРС маточное поголовье",
+            "cattle_short": "КРС",
+            "cattle_min": "поголовье",
+            "qty": "Количество",
+            "qty_short": "Кол-во",
+            "price": "Цена",
+            "total": "Итого",
+            "breed_cert": "Племенное свидетельство",
+            "attached": "ПРИЛАГАЕТСЯ",
+            "attached_low": "прилагается",
+            "survival_label": "Сохранность поголовья",
+            "vet_label": "Ветеринарное соответствие",
+            "growth_label": "Рост продукции",
+            "debt_label": "Долг/EBITDA",
+            "subsidy_label": "Зависимость от субсидий",
+            "prev_label": "Ранее получено субсидий",
+        },
+        "kz": {
+            "contract_title": "САТЫП АЛУ-САТУ ШАРТЫ",
+            "city": "Көкшетау қ.",
+            "seller": "Сатушы",
+            "buyer": "Сатып алушы",
+            "subject": "ШАРТТЫҢ ЗАТЫ",
+            "subject_text": "Сатушы ІҚМ мал басын береді.",
+            "subject_text_full": "Сатушы тұқымдық ірі қара мал аналық басын береді.",
+            "quantity": "Саны",
+            "heads": "бас",
+            "gender_age": "Жыныс-жас тобы: таналар.",
+            "breed": "Тұқымы: қазақ ақбас.",
+            "breed_mix": "Тұқымы: аралас.",
+            "age": "Жасы: 8-14 ай.",
+            "sum_calc": "СОМА ЖӘНЕ ЕСЕПТЕСУЛЕР",
+            "price_head": "Бас құны",
+            "total_sum": "Жалпы сома",
+            "debt_load": "Несие жүктемесі (Борыш/EBITDA)",
+            "growth": "Жалпы өнімнің өсуі",
+            "obligations": "ТАРАПТАРДЫҢ МІНДЕТТЕМЕЛЕРІ",
+            "oblig_text": "Сатып алушы малды мақсатты пайдалануды және 2 (екі) жыл ішінде үйді жаңғыртуды міндеттенеді.",
+            "oblig_text_short": "Сатып алушы малды мақсатты пайдалануды міндеттенеді.",
+            "party1": "1-тарап",
+            "party2": "2-тарап",
+            "payment": "Төлем",
+            "not_paid": "жүргізілмеді. Берешек.",
+            "survival": "Мал сақталуы",
+            "vet_compl": "Ветеринарлық сәйкестік",
+            "pedigree_share": "Тұқымдық мал үлесі",
+            "growth_prod": "Жалпы өнімнің өсуі",
+            "work_exp": "Жұмыс стажы",
+            "years": "жыл",
+            "subsidy_dep": "Субсидияға тәуелділік",
+            "prev_subsidies": "Бұрын алынған субсидиялар",
+            "copy_doc": "Құжат көшірмесі",
+            "params": "Параметрлер",
+            "payment_title": "ТӨЛЕМ ТАПСЫРМАСЫ",
+            "sender": "Жіберуші",
+            "receiver": "Алушы",
+            "sum_label": "Сома",
+            "purpose": "Тағайындау",
+            "payment_for": "ІҚМ үшін төлем",
+            "payment_for_contract": "Шарт бойынша төлем",
+            "status": "Мәртебе",
+            "not_executed": "ОРЫНДАЛМАДЫ. Берешек.",
+            "not_paid_full": "төлем жүргізілмеді.",
+            "of_total": "жалпы сомадан",
+            "spravka_title": "АҚПАРАТТЫҚ ЖҮЙЕЛЕРДЕН АНЫҚТАМА-РАСТАУ",
+            "spravka_short": "АНЫҚТАМА-РАСТАУ",
+            "spravka_min": "АНЫҚТАМА",
+            "issued_to": "Берілді",
+            "confirmed_heads": "Расталған бас саны",
+            "units": "бас",
+            "reg_iszh": "ИСЖ және ИБСПР тіркеу",
+            "registered": "ТІРКЕЛГЕН",
+            "vet_passport": "Ветеринарлық паспорт",
+            "issued_doc": "РӘСІМДЕЛГЕН",
+            "vet_welfare": "Ветеринарлық благополучие",
+            "land_cadastre": "Жер кадастры",
+            "available": "бар",
+            "pasture_supply": "Жайылыммен қамтамасыз ету",
+            "ha_head": "Га/бас",
+            "norm_dev": "Жүктеме нормасынан ауытқу",
+            "mortality_risk": "Аномалды өлім қаупі",
+            "farm_status": "Шаруашылық мәртебесі",
+            "active": "жұмыс істейтін",
+            "no_info": "ақпарат берілмеген",
+            "esf_title": "ЭЛЕКТРОНДЫ ШОТ-ФАКТУРА",
+            "esf_short": "ШОТ-ФАКТУРА",
+            "esf_min": "ҚҰЖАТ",
+            "date_issue": "Жазылған күні",
+            "date_label": "Күні",
+            "supplier": "Жеткізуші",
+            "goods": "Тауар",
+            "cattle": "ІҚМ аналық басы",
+            "cattle_short": "ІҚМ",
+            "cattle_min": "мал басы",
+            "qty": "Саны",
+            "qty_short": "Саны",
+            "price": "Бағасы",
+            "total": "Барлығы",
+            "breed_cert": "Тұқымдық куәлік",
+            "attached": "ҚОСА БЕРІЛДІ",
+            "attached_low": "қоса берілді",
+            "survival_label": "Мал сақталуы",
+            "vet_label": "Ветеринарлық сәйкестік",
+            "growth_label": "Өнімнің өсуі",
+            "debt_label": "Борыш/EBITDA",
+            "subsidy_label": "Субсидияға тәуелділік",
+            "prev_label": "Бұрын алынған субсидиялар",
+        },
+    }
+    t = T[lang]
+
     # ═══════════════════════════════════════════════════
-    # 1. ДОГОВОР КУПЛИ-ПРОДАЖИ
+    # 1. ДОГОВОР / ШАРТ
     # ═══════════════════════════════════════════════════
     if completeness == "full":
         docs["1_Dogovor_Kuplyu_Prodazhy.pdf"] = f"""
-ДОГОВОР КУПЛИ-ПРОДАЖИ № {d['contract_num']}
-г. Кокшетау, «{contract_day}» {contract_month} 2026 г.
+{t['contract_title']} № {d['contract_num']}
+{t['city']}, «{contract_day}» {contract_month} 2026 {t['years'][:2]}.
 
-Продавец: ТОО «Племзавод-Элита» (БИН {d['bin_seller']})
-Покупатель: {d['company']} (БИН {d['bin_buyer']})
+{t['seller']}: ТОО «Племзавод-Элита» (БИН {d['bin_seller']})
+{t['buyer']}: {d['company']} (БИН {d['bin_buyer']})
 
-1. ПРЕДМЕТ ДОГОВОРА
-1.1. Продавец передает племенное маточное поголовье КРС.
-1.2. Количество: {int(d['heads'])} голов. Половозрастная группа: телки.
-1.3. Порода: казахская белоголовая.
-1.4. Возраст: 8-14 месяцев.
+1. {t['subject']}
+1.1. {t['subject_text_full']}
+1.2. {t['quantity']}: {int(d['heads'])} {t['heads']}. {t['gender_age']}
+1.3. {t['breed']}
+1.4. {t['age']}
 
-2. СУММА И РАСЧЕТЫ
-2.1. Стоимость головы: {int(d['price_per_head']):,} тенге.
-2.2. Общая сумма: {int(d['total_sum']):,} тенге.
-2.3. Кредитная нагрузка (Долг/EBITDA): {d['debt_ebitda']}
-2.4. Рост валовой продукции: {d['gross_output_growth_yoy']*100:+.1f}%
+2. {t['sum_calc']}
+2.1. {t['price_head']}: {int(d['price_per_head']):,} тенге.
+2.2. {t['total_sum']}: {int(d['total_sum']):,} тенге.
+2.3. {t['debt_load']}: {d['debt_ebitda']}
+2.4. {t['growth']}: {d['gross_output_growth_yoy']*100:+.1f}%
 
-3. ОБЯЗАТЕЛЬСТВА СТОРОН
-3.1. Покупатель обязуется использовать поголовье по целевому назначению
-    для воспроизводства стада в течение не менее 2 (двух) лет.
-3.2. Покупатель обязуется обеспечить сохранность поголовья.
+3. {t['obligations']}
+3.1. {t['oblig_text']}
+3.2. {t['buyer']} {t['survival'].lower()} қамтамасыз етуді міндеттенеді.
 """
     elif completeness == "mostly_full":
         docs["1_Dogovor_Kuplyu_Prodazhy.pdf"] = f"""
-ДОГОВОР КУПЛИ-ПРОДАЖИ № {d['contract_num']}
-г. Кокшетау, «{contract_day}» {contract_month} 2026 г.
+{t['contract_title']} № {d['contract_num']}
+{t['city']}, «{contract_day}» {contract_month} 2026 {t['years'][:2]}.
 
-Продавец: ТОО «Племзавод-Элита» (БИН {d['bin_seller']})
-Покупатель: {d['company']} (БИН {d['bin_buyer']})
+{t['seller']}: ТОО «Племзавод-Элита» (БИН {d['bin_seller']})
+{t['buyer']}: {d['company']} (БИН {d['bin_buyer']})
 
-1. ПРЕДМЕТ ДОГОВОРА
-1.1. Продавец передает поголовье КРС.
-1.2. Количество: {int(d['heads'])} голов.
-1.3. Порода: смешанная.
+1. {t['subject']}
+1.1. {t['subject_text']}
+1.2. {t['quantity']}: {int(d['heads'])} {t['heads']}.
+1.3. {t['breed_mix']}
 
-2. СУММА И РАСЧЕТЫ
-2.1. Стоимость головы: {int(d['price_per_head']):,} тенге.
-2.2. Общая сумма: {int(d['total_sum']):,} тенге.
-2.3. Кредитная нагрузка (Долг/EBITDA): {d['debt_ebitda']}
+2. {t['sum_calc']}
+2.1. {t['price_head']}: {int(d['price_per_head']):,} тенге.
+2.2. {t['total_sum']}: {int(d['total_sum']):,} тенге.
+2.3. {t['debt_load']}: {d['debt_ebitda']}
 
-3. ОБЯЗАТЕЛЬСТВА СТОРОН
-3.1. Покупатель обязуется использовать поголовье по целевому назначению.
+3. {t['obligations']}
+3.1. {t['oblig_text_short']}
 """
     elif completeness == "partial":
         docs["1_Dogovor_Kuplyu_Prodazhy.pdf"] = f"""
-ДОГОВОР КУПЛИ-ПРОДАЖИ № {d['contract_num']}
-г. Кокшетау, «{contract_day}» {contract_month} 2026 г.
+{t['contract_title']} № {d['contract_num']}
+{t['city']}, «{contract_day}» {contract_month} 2026 {t['years'][:2]}.
 
-Продавец: ТОО «Племзавод-Элита»
-Покупатель: {d['company']}
+{t['seller']}: ТОО «Племзавод-Элита»
+{t['buyer']}: {d['company']}
 
-1. ПРЕДМЕТ ДОГОВОРА
-1.1. Продавец передает поголовье КРС.
-1.2. Количество: {int(d['heads'])} голов.
+1. {t['subject']}
+1.1. {t['subject_text']}
+1.2. {t['quantity']}: {int(d['heads'])} {t['heads']}.
 
-2. СУММА
-2.1. Общая сумма: {int(d['total_sum']):,} тенге.
-2.2. Кредитная нагрузка (Долг/EBITDA): {d['debt_ebitda']}
+2. {t['sum_calc']}
+2.1. {t['total_sum']}: {int(d['total_sum']):,} тенге.
+2.2. {t['debt_load']}: {d['debt_ebitda']}
 """
-    else:  # minimal — ПЛОХОЙ сценарий: ВПИСЫВАЕМ плохие числа
-        # Чтобы LLM/regex извлекли ПЛОХИЕ значения вместо оптимистичных дефолтов
+    else:  # minimal
         survival_pct = int(d['historical_survival_rate'] * 100)
         vet_pct_int = int(d['veterinary_compliance'] * 100)
         pedigree_pct = int(d['pedigree_ratio'] * 100)
         growth_pct = round(d['gross_output_growth_yoy'] * 100, 1)
         docs["1_Dogovor_Kuplyu_Prodazhy.pdf"] = f"""
-ДОГОВОР № {d['contract_num']}
-г. Кокшетау, {contract_date_str}
+{t['contract_title'].split()[0]} № {d['contract_num']}
+{t['city']}, {contract_date_str}
 
-Сторона 1: ТОО «Племзавод-Элита»
-Сторона 2: {d['company']}
+{t['party1']}: ТОО «Племзавод-Элита»
+{t['party2']}: {d['company']}
 
-1. Сторона 1 передает поголовье.
-2. Количество: {int(d['heads'])} голов.
-3. Стоимость: {int(d['total_sum']):,} тенге.
-4. Оплата: не произведена. Задолженность.
-5. Долг/EBITDA = {d['debt_ebitda']}
-6. Сохранность стада: {survival_pct}%
-7. Ветеринарное соответствие: {vet_pct_int}%
-8. Доля племенного поголовья: {pedigree_pct}%
-9. Рост валовой продукции: {growth_pct}%
-10. Стаж работы: {int(d['years_in_operation'])} лет
-11. Зависимость от субсидий: {round(d['subsidy_dependence_index']*100)}%
-12. Ранее получено субсидий: {int(d['previous_subsidies_count'])}
+1. {t['party1']} {t['cattle_min']} береді.
+2. {t['quantity']}: {int(d['heads'])} {t['heads']}.
+3. {t['total_sum']}: {int(d['total_sum']):,} тенге.
+4. {t['payment']}: {t['not_paid']}
+5. {t['debt_load']} = {d['debt_ebitda']}
+6. {t['survival']}: {survival_pct}%
+7. {t['vet_compl']}: {vet_pct_int}%
+8. {t['pedigree_share']}: {pedigree_pct}%
+9. {t['growth_prod']}: {growth_pct}%
+10. {t['work_exp']}: {int(d['years_in_operation'])} {t['years']}
+11. {t['subsidy_dep']}: {round(d['subsidy_dependence_index']*100)}%
+12. {t['prev_subsidies']}: {int(d['previous_subsidies_count'])}
 """
 
     # ═══════════════════════════════════════════════════
     # 2. КОПИЯ ДОГОВОРА
     # ═══════════════════════════════════════════════════
     docs["2_Dogovor_Kuplyu_Prodazhy_Copy.pdf"] = (
-        f"Копия документа № {d['contract_num']} от {contract_date_str}.\n"
-        f"Параметры: {int(d['heads'])} голов на сумму {int(d['total_sum']):,} KZT."
+        f"{t['copy_doc']} № {d['contract_num']} {contract_date_str}.\n"
+        f"{t['params']}: {int(d['heads'])} {t['heads']} {t['total_sum'].lower()} {int(d['total_sum']):,} KZT."
     )
 
     # ═══════════════════════════════════════════════════
@@ -618,24 +953,24 @@ def generate_documents_for_scenario(data: dict) -> list[str]:
     # ═══════════════════════════════════════════════════
     if completeness in ("full", "mostly_full", "partial"):
         docs["3_Platezhnoe_Poruchenie.pdf"] = f"""
-ПЛАТЕЖНОЕ ПОРУЧЕНИЕ № {d['payment_num']} от {payment_date_str}
-Отправитель: {d['company']}
-Получатель: ТОО «Племзавод-Элита»
-Сумма: {int(d['total_sum'] * d['payment_pct'] / 100):,} KZT ({d['payment_pct']}% от общей суммы)
-Назначение: Оплата за КРС ({int(d['heads'])} голов) по дог. № {d['contract_num']}.
-Статус: {d['payment_status']}
+{t['payment_title']} № {d['payment_num']} {payment_date_str}
+{t['sender']}: {d['company']}
+{t['receiver']}: ТОО «Племзавод-Элита»
+{t['sum_label']}: {int(d['total_sum'] * d['payment_pct'] / 100):,} KZT ({d['payment_pct']}% {t['of_total']})
+{t['purpose']}: {t['payment_for']} ({int(d['heads'])} {t['heads']}) {t['payment_for_contract']} № {d['contract_num']}.
+{t['status']}: {d['payment_status']}
 БИК: KZKAKZKX
 ИИК: KZ123456789012345678
 """
-    else:  # minimal — ПЛОХОЙ сценарий: плохие числа для LLM/regex
+    else:
         docs["3_Platezhnoe_Poruchenie.pdf"] = f"""
-ПЛАТЕЖНОЕ ПОРУЧЕНИЕ № {d['payment_num']} от {payment_date_str}
-Отправитель: {d['company']}
-Получатель: ТОО «Племзавод-Элита»
-Сумма: 0 KZT — оплата не произведена.
-Назначение: Оплата по дог. № {d['contract_num']}.
-Статус: НЕ ИСПОЛНЕНО. Задолженность.
-Долг/EBITDA = {d['debt_ebitda']}
+{t['payment_title']} № {d['payment_num']} {payment_date_str}
+{t['sender']}: {d['company']}
+{t['receiver']}: ТОО «Племзавод-Элита»
+{t['sum_label']}: 0 KZT — {t['not_paid_full']}
+{t['purpose']}: {t['payment_for_contract']} № {d['contract_num']}.
+{t['status']}: {t['not_executed']}
+{t['debt_label']} = {d['debt_ebitda']}
 """
 
     # ═══════════════════════════════════════════════════
@@ -643,44 +978,43 @@ def generate_documents_for_scenario(data: dict) -> list[str]:
     # ═══════════════════════════════════════════════════
     if completeness == "full":
         docs["4_Spravka_ISZH.pdf"] = f"""
-СПРАВКА-ПОДТВЕРЖДЕНИЕ ИЗ ИНФОРМАЦИОННЫХ СИСТЕМ
-Выдана: {d['company']}
-Подтверждено голов: {int(d['heads'])} ед.
-Регистрация в ИСЖ и ИБСПР: ЗАРЕГИСТРИРОВАНО
-Ветеринарный паспорт: ОФОРМЛЕН
-Ветеринарное благополучие: {d['vet_text']}
-Земельный кадастр: {d['pasture']} Га/голову
-Обеспеченность пастбищами: {d['pasture']} Га/голову.
-Отклонение от нормы нагрузки: {d['grazing_norm_deviation']:+.2f}
-Риск аномальной смертности: {d['natural_loss_risk_score']:.2f}
+{t['spravka_title']}
+{t['issued_to']}: {d['company']}
+{t['confirmed_heads']}: {int(d['heads'])} {t['units']}.
+{t['reg_iszh']}: {t['registered']}
+{t['vet_passport']}: {t['issued_doc']}
+{t['vet_welfare']}: {d['vet_text']}
+{t['land_cadastre']}: {d['pasture']} {t['ha_head']}
+{t['pasture_supply']}: {d['pasture']} {t['ha_head']}.
+{t['norm_dev']}: {d['grazing_norm_deviation']:+.2f}
+{t['mortality_risk']}: {d['natural_loss_risk_score']:.2f}
 """
     elif completeness == "mostly_full":
         docs["4_Spravka_ISZH.pdf"] = f"""
-СПРАВКА-ПОДТВЕРЖДЕНИЕ
-Выдана: {d['company']}
-Подтверждено голов: {int(d['heads'])} ед.
-Регистрация в ИСЖ и ИБСПР: ЗАРЕГИСТРИРОВАНО
-Ветеринарный паспорт: ОФОРМЛЕН
-Ветеринарное благополучие: {d['vet_text']}
-Земельный кадастр: имеется.
+{t['spravka_short']}
+{t['issued_to']}: {d['company']}
+{t['confirmed_heads']}: {int(d['heads'])} {t['units']}.
+{t['reg_iszh']}: {t['registered']}
+{t['vet_passport']}: {t['issued_doc']}
+{t['vet_welfare']}: {d['vet_text']}
+{t['land_cadastre']}: {t['available']}.
 """
     elif completeness == "partial":
-        # Без "ветеринар", "благополучи", "кадастр", "пастбищ"
         docs["4_Spravka_ISZH.pdf"] = f"""
-СПРАВКА
-Выдана: {d['company']}
-Подтверждено голов: {int(d['heads'])} ед.
-Регистрация в ИСЖ и ИБСПР: ЗАРЕГИСТРИРОВАНО
-Статус хозяйства: действующее.
+{t['spravka_min']}
+{t['issued_to']}: {d['company']}
+{t['confirmed_heads']}: {int(d['heads'])} {t['units']}.
+{t['reg_iszh']}: {t['registered']}
+{t['farm_status']}: {t['active']}.
 """
-    else:  # minimal — ПЛОХОЙ сценарий: плохие числа
+    else:
         docs["4_Spravka_ISZH.pdf"] = f"""
-СПРАВКА
-Выдана: {d['company']}
-Количество голов: {int(d['heads'])} ед.
-Сохранность поголовья: {int(d['historical_survival_rate']*100)}%
-Ветеринарное соответствие: {int(d['veterinary_compliance']*100)}%
-Статус: информация не предоставлена.
+{t['spravka_min']}
+{t['issued_to']}: {d['company']}
+{t['quantity']}: {int(d['heads'])} {t['units']}.
+{t['survival_label']}: {int(d['historical_survival_rate']*100)}%
+{t['vet_label']}: {int(d['veterinary_compliance']*100)}%
+{t['status']}: {t['no_info']}.
 """
 
     # ═══════════════════════════════════════════════════
@@ -688,63 +1022,63 @@ def generate_documents_for_scenario(data: dict) -> list[str]:
     # ═══════════════════════════════════════════════════
     if completeness == "full":
         docs["5_ESF.pdf"] = f"""
-ЭЛЕКТРОННАЯ СЧЕТ-ФАКТУРА № {d['esf_num']}
-Дата выписки: {esf_date_str}
-Поставщик: ТОО «Племзавод-Элита»
-Покупатель: {d['company']}
-Товар: КРС маточное поголовье.
-Количество: {int(d['heads'])}
-Цена: {int(d['price_per_head']):,}
-Итого: {int(d['total_sum']):,}
-Племенное свидетельство: ПРИЛАГАЕТСЯ
-Доля племенного поголовья: {d['pedigree_ratio']*100:.1f}%
-Сохранность поголовья: {d['historical_survival_rate']*100:.1f}%
-Ветеринарное соответствие: {d['veterinary_compliance']*100:.1f}%
+{t['esf_title']} № {d['esf_num']}
+{t['date_issue']}: {esf_date_str}
+{t['supplier']}: ТОО «Племзавод-Элита»
+{t['buyer']}: {d['company']}
+{t['goods']}: {t['cattle']}.
+{t['qty']}: {int(d['heads'])}
+{t['price']}: {int(d['price_per_head']):,}
+{t['total']}: {int(d['total_sum']):,}
+{t['breed_cert']}: {t['attached']}
+{t['pedigree_share']}: {d['pedigree_ratio']*100:.1f}%
+{t['survival_label']}: {d['historical_survival_rate']*100:.1f}%
+{t['vet_label']}: {d['veterinary_compliance']*100:.1f}%
 """
     elif completeness == "mostly_full":
         docs["5_ESF.pdf"] = f"""
-СЧЕТ-ФАКТУРА № {d['esf_num']}
-Дата: {esf_date_str}
-Поставщик: ТОО «Племзавод-Элита»
-Покупатель: {d['company']}
-Товар: КРС.
-Количество: {int(d['heads'])}
-Цена: {int(d['price_per_head']):,}
-Итого: {int(d['total_sum']):,}
-Племенное свидетельство: прилагается.
+{t['esf_short']} № {d['esf_num']}
+{t['date_label']}: {esf_date_str}
+{t['supplier']}: ТОО «Племзавод-Элита»
+{t['buyer']}: {d['company']}
+{t['goods']}: {t['cattle_short']}.
+{t['qty']}: {int(d['heads'])}
+{t['price']}: {int(d['price_per_head']):,}
+{t['total']}: {int(d['total_sum']):,}
+{t['breed_cert']}: {t['attached_low']}.
 """
     elif completeness == "partial":
-        # Без "акт", "ЭСФ", "счет-фактура", "порода", "племенное свидетельство"
         docs["5_ESF.pdf"] = f"""
-ДОКУМЕНТ № {d['esf_num']}
-Дата: {esf_date_str}
-Поставщик: ТОО «Племзавод-Элита»
-Покупатель: {d['company']}
-Товар: КРС.
-Количество: {int(d['heads'])}
-Сумма: {int(d['total_sum']):,}
+{t['esf_min']} № {d['esf_num']}
+{t['date_label']}: {esf_date_str}
+{t['supplier']}: ТОО «Племзавод-Элита»
+{t['buyer']}: {d['company']}
+{t['goods']}: {t['cattle_short']}.
+{t['qty']}: {int(d['heads'])}
+{t['sum_label']}: {int(d['total_sum']):,}
 """
-    else:  # minimal — ПЛОХОЙ сценарий: плохие числа
+    else:
         docs["5_ESF.pdf"] = f"""
-ДОКУМЕНТ № {d['esf_num']}
-Дата: {esf_date_str}
-Продавец: ТОО «Племзавод-Элита»
-Покупатель: {d['company']}
-Товар: поголовье.
-Кол-во: {int(d['heads'])}
-Сумма: {int(d['total_sum']):,}
-Доля племенного поголовья: {int(d['pedigree_ratio']*100)}%
-Сохранность: {int(d['historical_survival_rate']*100)}%
-Ветеринарное соответствие: {int(d['veterinary_compliance']*100)}%
-Рост продукции: {round(d['gross_output_growth_yoy']*100, 1)}%
-Стаж работы: {int(d['years_in_operation'])} лет
-Долг/EBITDA = {d['debt_ebitda']}
-Зависимость от субсидий: {round(d['subsidy_dependence_index']*100)}%
-Ранее получено субсидий: {int(d['previous_subsidies_count'])}
+{t['esf_min']} № {d['esf_num']}
+{t['date_label']}: {esf_date_str}
+{t['seller']}: ТОО «Племзавод-Элита»
+{t['buyer']}: {d['company']}
+{t['goods']}: {t['cattle_min']}.
+{t['qty_short']}: {int(d['heads'])}
+{t['sum_label']}: {int(d['total_sum']):,}
+{t['pedigree_share']}: {int(d['pedigree_ratio']*100)}%
+{t['survival_label']}: {int(d['historical_survival_rate']*100)}%
+{t['vet_label']}: {int(d['veterinary_compliance']*100)}%
+{t['growth_label']}: {round(d['gross_output_growth_yoy']*100, 1)}%
+{t['work_exp']}: {int(d['years_in_operation'])} {t['years']}
+{t['debt_label']} = {d['debt_ebitda']}
+{t['subsidy_label']}: {round(d['subsidy_dependence_index']*100)}%
+{t['prev_label']}: {int(d['previous_subsidies_count'])}
 """
 
     # Генерация файлов
-    print(f"\n📄 Генерация документов для сценария: {d['scenario_label']}...")
+    gen_label = f"📄 Құжаттарды генерациялау: {d['scenario_label']}..." if lang == "kz" else f"📄 Генерация документов для сценария: {d['scenario_label']}..."
+    print(f"\n{gen_label}")
     created_files = []
     for filename, text in docs.items():
         create_pdf(filename, text)
@@ -755,50 +1089,88 @@ def generate_documents_for_scenario(data: dict) -> list[str]:
 
 
 def print_mandatory_info(data: dict):
-    """Выводит обязательную информацию заявки (принтом, не в PDF)."""
+    """Выводит обязательную информацию заявки."""
+    global LANGUAGE
+    lang = LANGUAGE
     d = data
+
+    TITLE = "ДАННЫЕ ЗАЯВКИ" if lang == "ru" else "ӨТІНІМ ДЕРЕКТЕРІ"
+    BIN_LABEL = "БИН / ИИН предприятия:" if lang == "ru" else "Кәсіпорын БСН / ЖСН:"
+    REGION_LABEL = "Область:" if lang == "ru" else "Облыс:"
+    COMPANY_LABEL = "Наименование предприятия:" if lang == "ru" else "Кәсіпорын атауы:"
+    DIRECTION_LABEL = "Направление субсидии:" if lang == "ru" else "Субсидия бағыты:"
+    TYPE_LABEL = "Вид субсидии:" if lang == "ru" else "Субсидия түрі:"
+    SUM_LABEL = "Запрашиваемая сумма (тенге):" if lang == "ru" else "Сұралған сома (теңге):"
+
     print("\n" + "=" * 55)
-    print("  ДАННЫЕ ЗАЯВКИ")
+    print(f"  {TITLE}")
     print("=" * 55)
-    print(f"  БИН / ИИН предприятия:        {d['bin_buyer']}")
-    print(f"  Область:                      {d['region']}")
-    print(f"  Наименование предприятия:     {d['company']}")
-    print(f"  Направление субсидии:         {d['direction']}")
-    print(f"  Вид субсидии:                 {d['subsidy_name']}")
-    print(f"  Запрашиваемая сумма (тенге):  {int(d['total_sum']):,}")
+    print(f"  {BIN_LABEL:35s} {d['bin_buyer']}")
+    print(f"  {REGION_LABEL:35s} {d['region']}")
+    print(f"  {COMPANY_LABEL:35s} {d['company']}")
+    print(f"  {DIRECTION_LABEL:35s} {d['direction']}")
+    print(f"  {TYPE_LABEL:35s} {d['subsidy_name']}")
+    print(f"  {SUM_LABEL:35s} {int(d['total_sum']):,}")
     print("=" * 55)
 
 
 def print_score_prediction(prediction: dict):
     """Выводит предсказание скора."""
+    global LANGUAGE
+    lang = LANGUAGE
     p = prediction
+
+    TITLE = "ПРЕДСКАЗАНИЕ СКОРА" if lang == "ru" else "БОЛЖАМ БАЛЛ"
+    VERDICT_LABEL = "Вердикт:" if lang == "ru" else "Үкім:"
+    COMPONENTS_LABEL = "Разбивка по компонентам (максимум = вес компонента):" if lang == "ru" else "Компоненттер бойынша (максимум = салмақ):"
+
     print("\n" + "=" * 60)
-    print(f"  ПРЕДСКАЗАНИЕ СКОРА: {p['predicted_score']:.1f}  {p['zone_emoji']} {p['zone']}")
-    print(f"  Вердикт: {p['verdict']}")
+    print(f"  {TITLE}: {p['predicted_score']:.1f}  {p['zone_emoji']} {p['zone']}")
+    print(f"  {VERDICT_LABEL} {p['verdict']}")
     print("=" * 60)
-    print("  Разбивка по компонентам (максимум = вес компонента):")
+    print(f"  {COMPONENTS_LABEL}")
     for comp, val in p["components"].items():
-        bar_len = int(val / 100 * 20)
+        bar_len = max(0, min(20, int(val / 100 * 20)))
         bar = "█" * bar_len + "░" * (20 - bar_len)
         print(f"  {comp:35s} {bar} {val:5.1f}")
     print("=" * 60)
 
 
 def main():
+    global LANGUAGE
+
     print("=" * 65)
-    print("  SmartAgro Score | Генератор PDF-документов")
+    print("  SmartAgro Score | PDF құжаттар генераторы")
     print("=" * 65)
+
+    # Выбор языка / Тілді таңдау
+    print("\n🌐 Выберите язык / Тілді таңдаңыз:")
+    print("  1. Русский (ru)")
+    print("  2. Қазақша (kz)")
+    lang_choice = input("\nТіл (1-2) [ru]: ").strip()
+    if lang_choice == "2":
+        LANGUAGE = "kz"
+        print("✅ Таңдалған тіл: Қазақша")
+    else:
+        LANGUAGE = "ru"
+        print("✅ Выбранный язык: Русский")
+
+    lang = LANGUAGE
 
     scenarios_list = ["excellent", "good", "average", "poor"]
 
-    print("\nДоступные сценарии:")
+    print(f"\n{'Қолжетімді сценарийлер:' if lang == 'kz' else 'Доступные сценарии:'}")
     for i, key in enumerate(scenarios_list, 1):
-        print(f"  {i}. {SCENARIOS[key]['label']}")
+        print(f"  {i}. {SCENARIOS[key]['label'][lang]}")
 
-    print(f"\n  5. Сгенерировать ВСЕ сценарии")
-    print(f"  6. Сгенерировать НЕБЛАГОПРИЯТНЫЕ (average + poor)")
+    all_label = "БАРЛЫҚ сценарийлер" if lang == "kz" else "ВСЕ сценарии"
+    poor_label = "ҚОЛАЙСЫЗ (average + poor)" if lang == "kz" else "НЕБЛАГОПРИЯТНЫЕ (average + poor)"
+    choice_label = "Сценарийді таңдаңыз" if lang == "kz" else "Выберите сценарий"
 
-    choice = input("\nВыберите сценарий (1-6): ").strip()
+    print(f"\n  5. {all_label}")
+    print(f"  6. {poor_label}")
+
+    choice = input(f"\n{choice_label} (1-6): ").strip()
 
     if choice == "5":
         selected = scenarios_list
@@ -807,7 +1179,8 @@ def main():
     elif choice in "1234":
         selected = [scenarios_list[int(choice) - 1]]
     else:
-        print("❌ Неверный выбор. По умолчанию: все сценарии.")
+        default_msg = "Қате. Барлық сценарийлер." if lang == "kz" else "Неверный выбор. По умолчанию: все сценарии."
+        print(f"❌ {default_msg}")
         selected = scenarios_list
 
     all_results = []
@@ -830,19 +1203,24 @@ def main():
         })
 
     # Итоговая сводка
+    summary_title = "ҚОРЫТЫНДЫ" if lang == "kz" else "ИТОГОВАЯ СВОДКА"
+    done_msg = "Генерация аяқталды!" if lang == "kz" else "Генерация завершена!"
     print("\n\n" + "=" * 65)
-    print("  ИТОГОВАЯ СВОДКА")
+    print(f"  {summary_title}")
     print("=" * 65)
     for res in all_results:
         p = res["prediction"]
         d = res["data"]
         print(f"\n  {p['zone_emoji']} {d['scenario_label']}")
-        print(f"     Скор: {p['predicted_score']:.1f} | {d['company']}")
-        print(f"     Направление: {d['direction']}")
-        print(f"     Голов: {int(d['heads'])} | Сумма: {int(d['total_sum']):,} тенге")
-        print(f"     Файлы: {', '.join(res['files'])}")
+        print(f"     {'Скор:':<8} {p['predicted_score']:.1f} | {d['company']}")
+        print(f"     {'Бағыт:':<8} {d['direction']}" if lang == "kz" else f"     {'Направление:':<14} {d['direction']}")
+        heads_label = "Бас саны" if lang == "kz" else "Голов"
+        sum_label = "Сома" if lang == "kz" else "Сумма"
+        print(f"     {heads_label}: {int(d['heads'])} | {sum_label}: {int(d['total_sum']):,} тенге")
+        files_label = "Файлдар" if lang == "kz" else "Файлы"
+        print(f"     {files_label}: {', '.join(res['files'])}")
     print("\n" + "=" * 65)
-    print("  ✨ Генерация завершена!")
+    print(f"  ✨ {done_msg}")
     print("=" * 65)
 
 

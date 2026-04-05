@@ -17,5 +17,6 @@
   "is_producer",
   "hour_submitted",
   "month_submitted",
-  "region_encoded"
+  "region_encoded",
+  "language_code"
 ]

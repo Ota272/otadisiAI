@@ -22,7 +22,7 @@ from xgboost import XGBRegressor
 warnings.filterwarnings("ignore")                                          
 
 RANDOM_SEED  = 42
-INPUT_FILE   = str(Path(__file__).parent.parent / "data" / "data_features.csv")
+INPUT_FILE   = str(Path(__file__).parent.parent / "data" / "data_features_combined.csv")
 MODELS_DIR   = Path(__file__).parent.parent / "models"
 REPORTS_DIR  = Path(__file__).parent.parent / "reports"
 
@@ -49,6 +49,7 @@ ML_FEATURES = [
     "hour_submitted",
     "month_submitted",
     "region_encoded",
+    "language_code",
 ]
 
 TARGET = "historical_score"

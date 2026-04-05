@@ -11,35 +11,71 @@ import shap
 MODELS_DIR = Path("models")
 
 FEATURE_LABELS = {
-    "gross_output_growth_yoy":    "Рост валовой продукции (г/г)",
-    "land_to_livestock_ratio":    "Обеспеченность пастбищами (Га/голова)",
-    "historical_survival_rate":   "Сохранность поголовья (%)",
-    "subsidy_dependence_index":   "Индекс зависимости от субсидий",
-    "veterinary_compliance":      "Ветеринарное соответствие",
-    "years_in_operation":         "Стаж работы предприятия (лет)",
-    "pedigree_ratio":             "Доля племенного поголовья",
-    "previous_subsidies_count":   "Количество предыдущих субсидий",
-    "debt_load_ratio":            "Долговая нагрузка (Долг/EBITDA)",
-    "grazing_norm_deviation":     "Отклонение нагрузки пастбищ от нормы",
-    "natural_loss_risk_score":    "Риск аномальной смертности",
-    "log_amount":                 "Масштаб заявки (log суммы)",
-    "livestock_count":            "Количество голов скота",
-    "direction_code":             "Направление животноводства",
-    "is_pedigree":                "Племенное направление",
-    "is_producer":                "Субсидия на производителей",
-    "hour_submitted":             "Час подачи заявки",
-    "month_submitted":            "Месяц подачи заявки",
-    "region_encoded":             "Регион хозяйства",
+    "ru": {
+        "gross_output_growth_yoy":    "Рост валовой продукции (г/г)",
+        "land_to_livestock_ratio":    "Обеспеченность пастбищами (Га/голова)",
+        "historical_survival_rate":   "Сохранность поголовья (%)",
+        "subsidy_dependence_index":   "Индекс зависимости от субсидий",
+        "veterinary_compliance":      "Ветеринарное соответствие",
+        "years_in_operation":         "Стаж работы предприятия (лет)",
+        "pedigree_ratio":             "Доля племенного поголовья",
+        "previous_subsidies_count":   "Количество предыдущих субсидий",
+        "debt_load_ratio":            "Долговая нагрузка (Долг/EBITDA)",
+        "grazing_norm_deviation":     "Отклонение нагрузки пастбищ от нормы",
+        "natural_loss_risk_score":    "Риск аномальной смертности",
+        "log_amount":                 "Масштаб заявки (log суммы)",
+        "livestock_count":            "Количество голов скота",
+        "direction_code":             "Направление животноводства",
+        "is_pedigree":                "Племенное направление",
+        "is_producer":                "Субсидия на производителей",
+        "hour_submitted":             "Час подачи заявки",
+        "month_submitted":            "Месяц подачи заявки",
+        "region_encoded":             "Регион хозяйства",
+        "language_code":              "Язык заявки (0=RU, 1=KZ)",
+    },
+    "kz": {
+        "gross_output_growth_yoy":    "Жалпы өнімнің өсуі (ж/ж)",
+        "land_to_livestock_ratio":    "Жайылыммен қамтамасыз ету (Га/бас)",
+        "historical_survival_rate":   "Мал сақталуы (%)",
+        "subsidy_dependence_index":   "Субсидияға тәуелділік индексі",
+        "veterinary_compliance":      "Ветеринарлық сәйкестік",
+        "years_in_operation":         "Кәсіпорынның жұмыс стажы (жыл)",
+        "pedigree_ratio":             "Тұқымдық мал үлесі",
+        "previous_subsidies_count":   "Алдыңғы субсидиялар саны",
+        "debt_load_ratio":            "Борыш жүктемесі (Борыш/EBITDA)",
+        "grazing_norm_deviation":     "Жайылым жүктемесінің ауытқуы",
+        "natural_loss_risk_score":    "Аномалды өлім қаупі",
+        "log_amount":                 "Өтінім масштабы (log сома)",
+        "livestock_count":            "Мал басының саны",
+        "direction_code":             "Мал шаруашылығы бағыты",
+        "is_pedigree":                "Тұқымдық бағыт",
+        "is_producer":                "Өндірушілерге субсидия",
+        "hour_submitted":             "Өтінім беру сағаты",
+        "month_submitted":            "Өтінім беру айы",
+        "region_encoded":             "Шаруашылық аймағы",
+        "language_code":              "Өтінім тілі (0=RU, 1=KZ)",
+    },
 }
 
 DIRECTION_NAMES = {
-    0: "скотоводство (КРС)",
-    1: "овцеводство",
-    2: "коневодство",
-    3: "птицеводство",
-    4: "верблюдоводство",
-    5: "свиноводство",
-    6: "прочее",
+    "ru": {
+        0: "скотоводство (КРС)",
+        1: "овцеводство",
+        2: "коневодство",
+        3: "птицеводство",
+        4: "верблюдоводство",
+        5: "свиноводство",
+        6: "прочее",
+    },
+    "kz": {
+        0: "мал шаруашылығы (ІҚМ)",
+        1: "қой шаруашылығы",
+        2: "жылқы шаруашылығы",
+        3: "құс шаруашылығы",
+        4: "түйе шаруашылығы",
+        5: "шошқа шаруашылығы",
+        6: "басқа",
+    },
 }
 
 # These keys are expected by the feature merge logic in src/main.py.
@@ -70,7 +106,6 @@ class ScoringEngine:
         with open(models_dir / "feature_names.json", encoding="utf-8") as f:
             self.feature_names = json.load(f)
 
-        # Проверка что SHAP explainer соответствует модели
         self._validate_shap_consistency()
 
         print(f"✅ Движок готов: {len(self.feature_names)} фичей, модель загружена")
@@ -108,6 +143,7 @@ class ScoringEngine:
         raw_features: dict,
         llm_context: Optional[str] = None,
         *,
+        lang: str = "ru",
         include_shap: bool = True,
     ) -> dict:
 
@@ -122,7 +158,7 @@ class ScoringEngine:
             shap_values = self._compute_shap(X_scaled)
             shap_base = self._get_shap_base_value(X_scaled)
             top_positive, top_negative = self._build_explanations(
-                shap_values, raw_features, n_factors=3
+                shap_values, raw_features, lang=lang, n_factors=3
             )
             all_shap_values = {
                 name: round(float(val), 3)
@@ -135,10 +171,10 @@ class ScoringEngine:
             all_shap_values = {}
             explainability = "отключено (демо-пакет)"
 
-        zone, zone_label, recommendation = self._get_zone(score)
+        zone, zone_label, recommendation = self._get_zone(score, lang=lang)
 
         verdict_text = self._generate_verdict(
-            score, zone, top_positive, top_negative, llm_context
+            score, zone, top_positive, top_negative, llm_context, lang=lang
         )
 
         return {
@@ -181,6 +217,7 @@ class ScoringEngine:
         "hour_submitted": 12.0,
         "month_submitted": 6.0,
         "region_encoded": 7.0,
+        "language_code": 0.0,
     }
 
     def _prepare_feature_vector(self, raw: dict) -> pd.DataFrame:
@@ -219,6 +256,7 @@ class ScoringEngine:
         self,
         shap_values: np.ndarray,
         raw_features: dict,
+        lang: str = "ru",
         n_factors: int = 3,
     ) -> tuple[list[dict], list[dict]]:
         factors = []
@@ -226,9 +264,9 @@ class ScoringEngine:
             raw_val = raw_features.get(name, 0.0)
             if raw_val is None:
                 raw_val = 0.0
-            label = FEATURE_LABELS.get(name, name)
+            label = FEATURE_LABELS[lang].get(name, name)
 
-            explanation_text = self._explain_feature(name, raw_val, float(shap_val))
+            explanation_text = self._explain_feature(name, raw_val, float(shap_val), lang=lang)
 
             factors.append({
                 "feature": name,
@@ -237,7 +275,7 @@ class ScoringEngine:
                 "raw_value": round(float(raw_val), 4) if isinstance(raw_val, (int, float)) else raw_val,
                 "direction": "positive" if shap_val > 0 else "negative",
                 "explanation": explanation_text,
-                "impact_text": f"{'+'if shap_val>0 else ''}{shap_val:.1f} баллов: {explanation_text}",
+                "impact_text": f"{'+'if shap_val>0 else ''}{shap_val:.1f} балл: {explanation_text}",
             })
 
         factors.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
@@ -247,103 +285,108 @@ class ScoringEngine:
 
         return positive, negative
 
-    def _explain_feature(self, name: str, value: float, shap_val: float) -> str:
+    def _explain_feature(self, name: str, value: float, shap_val: float, lang: str = "ru") -> str:
         positive = shap_val > 0
+
+        TEXT = {
+            "ru": {
+                "gross_pos": lambda v: f"Рост валовой продукции {v:+.1f}% г/г — положительная динамика",
+                "gross_neg": lambda v: f"Спад валовой продукции {v:+.1f}% г/г — отрицательная динамика",
+                "pedigree_pos": lambda v: f"Высокая доля племенного поголовья {v:.0f}% — значительный племенной потенциал",
+                "pedigree_neg": lambda v: f"Низкая доля племенного поголовья {v:.0f}% — слабая племенная база",
+                "survival_pos": lambda v: f"Высокая сохранность стада {v:.1f}% — хорошее ветеринарное управление",
+                "survival_neg": lambda v: f"Низкая сохранность стада {v:.1f}% — повышенный падёж животных",
+                "subsidy_pos": lambda v: f"Умеренная зависимость от субсидий {v:.0f}% — экономическая самостоятельность",
+                "subsidy_neg": lambda v: f"Высокая зависимость от субсидий {v:.0f}% — бизнес на дотациях",
+                "vet_pos": lambda v: f"Высокое ветеринарное соответствие {v:.0f}% — нормы соблюдены",
+                "vet_neg": lambda v: f"Нарушение ветеринарных норм (соответствие {v:.0f}%)",
+                "debt_pos": lambda v: f"Низкая долговая нагрузка (Долг/EBITDA = {v:.2f})",
+                "debt_neg": lambda v: f"Высокая долговая нагрузка (Долг/EBITDA = {v:.2f})",
+                "years_pos": lambda v: f"Опытное предприятие ({v:.0f} лет) — проверенная история",
+                "years_neg": lambda v: f"Молодое предприятие ({v:.0f} лет) — ограниченная история",
+                "land_pos": lambda v: f"Хорошая обеспеченность пастбищами ({v:.1f} Га/голову)",
+                "land_neg": lambda v: f"Низкая обеспеченность пастбищами ({v:.1f} Га/голову)",
+                "prev_pos": lambda v: f"Успешная история субсидирования ({v:.0f} субсидий)",
+                "prev_neg": lambda v: f"Нет истории субсидирования — новый участник",
+                "livestock_pos": lambda v: f"Крупное хозяйство ({v:.0f} голов)",
+                "livestock_neg": lambda v: f"Небольшое хозяйство ({v:.0f} голов)",
+                "pedigree_dir": "Субсидия на племенное поголовье — стратегическое направление",
+                "pedigree_dir_no": "Субсидия на товарное производство",
+                "default": lambda lbl, d: f"Показатель '{lbl}' влияет {d} на оценку",
+            },
+            "kz": {
+                "gross_pos": lambda v: f"Жалпы өнімнің өсуі {v:+.1f}% ж/ж — оң динамика",
+                "gross_neg": lambda v: f"Жалпы өнімнің төмендеуі {v:+.1f}% ж/ж — теріс динамика",
+                "pedigree_pos": lambda v: f"Тұқымдық мал үлесі жоғары {v:.0f}% — елеуметтік әлеует",
+                "pedigree_neg": lambda v: f"Тұқымдық мал үлесі төмен {v:.0f}% — әлсіз тұқымдық база",
+                "survival_pos": lambda v: f"Мал сақталуы жоғары {v:.1f}% — жақсы ветеринарлық басқару",
+                "survival_neg": lambda v: f"Мал сақталуы төмен {v:.1f}% — жоғары шығын",
+                "subsidy_pos": lambda v: f"Субсидияға тәуелділік төмен {v:.0f}% — экономикалық дербестік",
+                "subsidy_neg": lambda v: f"Субсидияға жоғары тәуелділік {v:.0f}% — субсидиядағы бизнес",
+                "vet_pos": lambda v: f"Ветеринарлық сәйкестік жоғары {v:.0f}% — нормалар сақталған",
+                "vet_neg": lambda v: f"Ветеринарлық нормалардың бұзылуы (сәйкестік {v:.0f}%)",
+                "debt_pos": lambda v: f"Борыш жүктемесі төмен (Борыш/EBITDA = {v:.2f})",
+                "debt_neg": lambda v: f"Борыш жүктемесі жоғары (Борыш/EBITDA = {v:.2f})",
+                "years_pos": lambda v: f"Тәжірибелі кәсіпорын ({v:.0f} жыл) — тексерілген тарих",
+                "years_neg": lambda v: f"Жас кәсіпорын ({v:.0f} жыл) — шектеулі тарих",
+                "land_pos": lambda v: f"Жайылыммен жақсы қамтамасыз етілген ({v:.1f} Га/бас)",
+                "land_neg": lambda v: f"Жайылыммен нашар қамтамасыз етілген ({v:.1f} Га/бас)",
+                "prev_pos": lambda v: f"Сәтті субсидиялау тарихы ({v:.0f} субсидия)",
+                "prev_neg": lambda v: f"Субсидиялау тарихы жоқ — жаңа қатысушы",
+                "livestock_pos": lambda v: f"Ірі шаруашылық ({v:.0f} бас)",
+                "livestock_neg": lambda v: f"Кіші шаруашылық ({v:.0f} бас)",
+                "pedigree_dir": "Тұқымдық малға субсидия — стратегиялық бағыт",
+                "pedigree_dir_no": "Тауарлық өндіріске субсидия",
+                "default": lambda lbl, d: f"'{lbl}' көрсеткіші {d} әсер етеді",
+            },
+        }
+        t = TEXT[lang]
 
         if name == "gross_output_growth_yoy":
             pct = value * 100
-            shap_verb = "повышает итоговый балл относительно базы модели" if shap_val > 0 else "снижает итоговый балл относительно базы модели"
-            if value >= 0:
-                return f"В данных заявки рост валовой продукции {pct:+.1f}% г/г; вклад SHAP: {shap_verb}."
-            return f"В данных заявки спад валовой продукции {pct:+.1f}% г/г; вклад SHAP: {shap_verb}."
-
+            return t["gross_pos"](pct) if positive else t["gross_neg"](pct)
         elif name == "pedigree_ratio":
             pct = value * 100
-            if positive:
-                return f"Высокая доля племенного поголовья {pct:.0f}% — значительный племенной потенциал"
-            else:
-                return f"Низкая доля племенного поголовья {pct:.0f}% — слабая племенная база"
-
+            return t["pedigree_pos"](pct) if positive else t["pedigree_neg"](pct)
         elif name == "historical_survival_rate":
             pct = value * 100
-            if positive:
-                return f"Высокая сохранность стада {pct:.1f}% — хорошее ветеринарное управление"
-            else:
-                return f"Низкая сохранность стада {pct:.1f}% — повышенный падёж животных"
-
+            return t["survival_pos"](pct) if positive else t["survival_neg"](pct)
         elif name == "subsidy_dependence_index":
             pct = value * 100
-            if positive:
-                return f"Умеренная зависимость от субсидий {pct:.0f}% — экономически самостоятельно"
-            else:
-                return f"Высокая зависимость от субсидий {pct:.0f}% — бизнес держится на дотациях"
-
+            return t["subsidy_pos"](pct) if positive else t["subsidy_neg"](pct)
         elif name == "veterinary_compliance":
             pct = value * 100
-            if positive:
-                return f"Высокое ветеринарное соответствие {pct:.0f}% — все нормы соблюдены"
-            else:
-                return f"Нарушения ветеринарных норм (соответствие {pct:.0f}%)"
-
+            return t["vet_pos"](pct) if positive else t["vet_neg"](pct)
         elif name == "debt_load_ratio":
-            shap_verb = "вклад SHAP положительный для балла" if shap_val > 0 else "вклад SHAP отрицательный для балла"
-            if value <= 0.05:
-                return f"Долг/EBITDA ≈ {value:.2f} по входу модели (нет или минимальная нагрузка); {shap_verb}."
-            return f"Долг/EBITDA = {value:.2f} по входу модели; {shap_verb}."
-
+            return t["debt_pos"](value) if positive else t["debt_neg"](value)
         elif name == "years_in_operation":
-            if positive:
-                return f"Опытное предприятие ({value:.0f} лет работы) — проверенная история"
-            else:
-                return f"Молодое предприятие ({value:.0f} лет) — ограниченная история деятельности"
-
+            return t["years_pos"](value) if positive else t["years_neg"](value)
         elif name == "land_to_livestock_ratio":
-            if positive:
-                return f"Хорошая обеспеченность пастбищами ({value:.1f} Га/голову)"
-            else:
-                return f"Низкая обеспеченность землёй ({value:.1f} Га/голову) — перегруженность пастбищ"
-
+            return t["land_pos"](value) if positive else t["land_neg"](value)
         elif name == "previous_subsidies_count":
-            if positive:
-                return f"Успешная история субсидирования ({value:.0f} предыдущих субсидий)"
-            else:
-                return f"Нет истории получения субсидий — новый участник программы"
-
+            return t["prev_pos"](value) if positive else t["prev_neg"](value)
         elif name == "livestock_count":
-            if positive:
-                return f"Крупное хозяйство ({value:.0f} голов) — значимый масштаб производства"
-            else:
-                return f"Небольшое хозяйство ({value:.0f} голов) — ограниченный масштаб"
-
+            return t["livestock_pos"](value) if positive else t["livestock_neg"](value)
         elif name == "is_pedigree":
-            if value == 1:
-                return "Субсидия на племенное поголовье — стратегическое направление"
-            else:
-                return "Субсидия на товарное производство"
-
+            return t["pedigree_dir"] if value == 1 else t["pedigree_dir_no"]
         else:
-            direction_word = "положительно" if positive else "отрицательно"
-            return f"Показатель '{FEATURE_LABELS.get(name, name)}' влияет {direction_word} на оценку"
+            lbl = FEATURE_LABELS[lang].get(name, name)
+            direction = "оң" if positive else "теріс" if lang == "kz" else "положительно" if positive else "отрицательно"
+            return t["default"](lbl, direction)
 
-    def _get_zone(self, score: float) -> tuple[str, str, str]:
+    def _get_zone(self, score: float, lang: str = "ru") -> tuple[str, str, str]:
         if score >= 80:
-            return (
-                "green",
-                "Зелёная зона (80–100)",
-                "Строго рекомендовано к включению в шорт-лист"
-            )
+            if lang == "kz":
+                return ("green", "Жасыл аймақ (80–100)", "Қысқа тізімге басымдықпен ұсынылады")
+            return ("green", "Зелёная зона (80–100)", "Строго рекомендовано к включению в шорт-лист")
         elif score >= 50:
-            return (
-                "yellow",
-                "Жёлтая зона (50–79)",
-                "Рекомендуется дополнительное рассмотрение комиссией"
-            )
+            if lang == "kz":
+                return ("yellow", "Сары аймақ (50–79)", "Комиссиямен қосымша қарау ұсынылады")
+            return ("yellow", "Жёлтая зона (50–79)", "Рекомендуется дополнительное рассмотрение комиссией")
         else:
-            return (
-                "red",
-                "Красная зона (0–49)",
-                "Не рекомендовано — выявлены существенные риски"
-            )
+            if lang == "kz":
+                return ("red", "Қызыл аймақ (0–49)", "Ұсынылмайды — елеуметті тәуекелдер анықталды")
+            return ("red", "Красная зона (0–49)", "Не рекомендовано — выявлены существенные риски")
 
     def _generate_verdict(
         self,
@@ -352,34 +395,46 @@ class ScoringEngine:
         top_positive: list,
         top_negative: list,
         llm_context: Optional[str],
+        lang: str = "ru",
     ) -> str:
         verdict_parts = []
 
-        zone_intros = {
-            "green": f"Предприятие получило высокий балл {score:.0f}/100 и рекомендуется к приоритетному рассмотрению.",
-            "yellow": f"Предприятие получило балл {score:.0f}/100. Рекомендуется детальное рассмотрение комиссией.",
-            "red":    f"Предприятие получило балл {score:.0f}/100. Система выявила существенные риски.",
+        ZONE_INTROS = {
+            "ru": {
+                "green": f"Предприятие получило высокий балл {score:.0f}/100 и рекомендуется к приоритетному рассмотрению.",
+                "yellow": f"Предприятие получило балл {score:.0f}/100. Рекомендуется детальное рассмотрение комиссией.",
+                "red":    f"Предприятие получило балл {score:.0f}/100. Система выявила существенные риски.",
+            },
+            "kz": {
+                "green": f"Кәсіпорын {score:.0f}/100 балл алды және басымдықпен қарауға ұсынылады.",
+                "yellow": f"Кәсіпорын {score:.0f}/100 балл алды. Комиссиямен толық қарау ұсынылады.",
+                "red":    f"Кәсіпорын {score:.0f}/100 балл алды. Жүйе елеуметті тәуекелдерді анықтады.",
+            },
         }
-        verdict_parts.append(zone_intros[zone])
+        verdict_parts.append(ZONE_INTROS[lang][zone])
+
+        strong_label = "✅ Сильные стороны:" if lang == "ru" else "✅ Күшті жақтары:"
+        risk_label = "⚠️ Факторы риска:" if lang == "ru" else "⚠️ Тәуекел факторлары:"
+        doc_label = "📄 Данные из документов:" if lang == "ru" else "📄 Құжаттардан алынған деректер:"
 
         if top_positive:
-            verdict_parts.append("\n✅ Сильные стороны:")
+            verdict_parts.append(f"\n{strong_label}")
             for factor in top_positive:
                 verdict_parts.append(f"  • {factor['explanation']}")
 
         if top_negative:
-            verdict_parts.append("\n⚠️ Факторы риска:")
+            verdict_parts.append(f"\n{risk_label}")
             for factor in top_negative:
                 verdict_parts.append(f"  • {factor['explanation']}")
 
         if llm_context:
-            verdict_parts.append(f"\n📄 Данные из документов:\n  {llm_context}")
+            verdict_parts.append(f"\n{doc_label}\n  {llm_context}")
 
-        verdict_parts.append(
-            "\n⚖️ Данная оценка является рекомендацией ИИ-системы. "
-            "Окончательное решение принимается уполномоченной комиссией "
-            "Министерства сельского хозяйства РК."
-        )
+        DISCLAIMER = {
+            "ru": "\n⚖️ Данная оценка является рекомендацией ИИ-системы. Окончательное решение принимается уполномоченной комиссией Министерства сельского хозяйства РК.",
+            "kz": "\n⚖️ Бұл баға ЖЖ жүйесінің ұсынысы болып табылады. Қорытынды шешімді ҚР Ауыл шаруашылығы министрлігінің уәкілетті комиссиясы қабылдайды.",
+        }
+        verdict_parts.append(DISCLAIMER[lang])
 
         return "\n".join(verdict_parts)
 

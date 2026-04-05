@@ -84,8 +84,8 @@ def _groq_truncate(text: str, max_chars: int) -> str:
     """Сокращает текст, сохраняя начало и конец."""
     if len(text) <= max_chars:
         return text
-    third = max_chars // 3
-    return text[:third] + "\n\n[... сокращено для Groq лимита ...]\n\n" + text[-third:]
+    quarter = max_chars // 4
+    return text[:quarter] + "\n[...сокращено...]\n" + text[-quarter:]
 
 
 def groq_chat(
@@ -103,17 +103,16 @@ def groq_chat(
         raise RuntimeError("GROQ_API_KEY не задан")
     m = (model or _s("GROQ_CHAT_MODEL") or _s("GROQ_EXPERT_MODEL") or "llama-3.1-8b-instant").strip()
     
-    # Groq лимит: 6000 TPM. Оставляем ~2000 на ответ.
-    # 1 токен ≈ 2.5 символа → макс вход ~3500 токенов ≈ 8750 символов
-    GROQ_MAX_CHARS = 8000
+    # Groq лимит: 6000 TPM. Режем ЖЁСТКО до 1500 символов.
+    GROQ_MAX_CHARS = 1500
     total_chars = len(system_prompt) + len(user_message)
     
     if total_chars > GROQ_MAX_CHARS:
-        target_each = GROQ_MAX_CHARS // 2 - 500
+        target_each = GROQ_MAX_CHARS // 2
         system_prompt = _groq_truncate(system_prompt, target_each)
         user_message = _groq_truncate(user_message, target_each)
         final_chars = len(system_prompt) + len(user_message)
-        print(f"[groq_chat] Сокращено: {total_chars} → {final_chars} символов")
+        print(f"[groq_chat] СОКРАЩЕНО: {total_chars} → {final_chars} символов")
     
     client = OpenAI(api_key=gkey, base_url="https://api.groq.com/openai/v1")
     resp = client.chat.completions.create(

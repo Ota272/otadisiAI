@@ -692,10 +692,33 @@ def _expert_chat_completion(
     user_message: str,
 ) -> str:
     """OpenAI-совместимый Chat Completions (OpenAI, Groq, локальный прокси и т.д.)."""
+    print(f"[expert_chat_completion] ВЫЗВАН! base_url={base_url}, model={model}")
+    print(f"[expert_chat_completion] system={len(system_prompt)}, user={len(user_message)}, total={len(system_prompt)+len(user_message)}")
+    
     try:
         from openai import OpenAI
     except ImportError as ie:
         raise RuntimeError("Установите пакет openai: pip install openai") from ie
+
+    # Groq лимит: 6000 TPM. Режем ЖЁСТКО до 1500 символов.
+    GROQ_MAX_CHARS = 1500
+    total_chars = len(system_prompt) + len(user_message)
+
+    # Проверяем, это Groq?
+    is_groq = base_url and "groq.com" in base_url
+    print(f"[expert_chat_completion] is_groq={is_groq}, total_chars={total_chars}")
+
+    if is_groq and total_chars > GROQ_MAX_CHARS:
+        target_each = GROQ_MAX_CHARS // 2
+        if len(system_prompt) > target_each:
+            q = target_each // 4
+            system_prompt = system_prompt[:q] + "\n[...сокращено...]\n" + system_prompt[-q:]
+        if len(user_message) > target_each:
+            q = target_each // 4
+            user_message = user_message[:q] + "\n[...сокращено...]\n" + user_message[-q:]
+        final_chars = len(system_prompt) + len(user_message)
+        print(f"[expert_chat] Groq СОКРАЩЕНО: {total_chars} → {final_chars} символов")
+
     kwargs = {"api_key": api_key}
     if base_url:
         kwargs["base_url"] = base_url
@@ -717,17 +740,36 @@ def _expert_chat_completion(
 
 def _expert_opinion_via_groq(system_prompt: str, user_message: str) -> str:
     """Бесплатный tier Groq (отдельная квота от Gemini). Ключ: https://console.groq.com/keys"""
+    from openai import OpenAI
+    
     gkey = os.getenv("GROQ_API_KEY", "").strip()
     if not gkey:
         raise RuntimeError("GROQ_API_KEY не задан")
     model = (os.getenv("GROQ_EXPERT_MODEL") or "llama-3.1-8b-instant").strip()
-    return _expert_chat_completion(
-        api_key=gkey,
-        base_url="https://api.groq.com/openai/v1",
+    
+    # РЕЖЕМ В ЛОБ: оставляем только первые 500 символов system и 1000 user
+    system_prompt = system_prompt[:500]
+    user_message = user_message[:1000]
+    
+    # Добавляем инструкцию НЕ добавлять шапку
+    system_prompt += "\n\nВАЖНО: НЕ добавляй в начало: номер заявки, дату, исполнителя, должность, тему. НЕ добавляй в конец: подпись, должность. Пиши ТОЛЬКО текст заключения."
+    
+    print(f"[groq_direct] ОТПРАВЛЯЮ: system={len(system_prompt)}, user={len(user_message)}, total={len(system_prompt)+len(user_message)}")
+    
+    client = OpenAI(api_key=gkey, base_url="https://api.groq.com/openai/v1")
+    resp = client.chat.completions.create(
         model=model,
-        system_prompt=system_prompt,
-        user_message=user_message,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        temperature=0.2,
+        max_tokens=2048,
     )
+    text = (resp.choices[0].message.content or "").strip()
+    if not text:
+        raise RuntimeError("Пустой ответ модели")
+    return text
 
 
 def _expert_opinion_via_openai(system_prompt: str, user_message: str) -> str:

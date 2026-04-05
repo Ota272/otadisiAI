@@ -1,5 +1,5 @@
-
 import json
+import os
 import re
 from dataclasses import dataclass, field as dc_field
 from pathlib import Path
@@ -290,14 +290,32 @@ class ComplianceReport:
 
 class ComplianceChecker:
 
-    def __init__(self, gemini_api_key: Optional[str] = None, use_embeddings: bool = True):
-
+    def __init__(
+        self,
+        gemini_api_key: Optional[str] = None,
+        use_embeddings: bool = True,
+        llm_backend: str = "none",
+    ):
         self.api_key = gemini_api_key
-        self.use_llm = bool(gemini_api_key)
+        self.llm_backend = llm_backend
+        self._groq_key = (os.getenv("GROQ_API_KEY") or "").strip()
+        if llm_backend == "groq":
+            self.use_llm = bool(self._groq_key)
+        elif llm_backend == "gemini":
+            self.use_llm = bool(gemini_api_key)
+        else:
+            self.use_llm = False
         self.use_embeddings = use_embeddings
         self._embed_model = None
 
-        mode = "Embeddings + Negation" if self.use_embeddings else ("LLM (Gemini)" if self.use_llm else "Keyword search")
+        if self.use_embeddings:
+            mode = "Embeddings + Negation"
+        elif self.use_llm:
+            mode = f"LLM ({'Groq' if llm_backend == 'groq' else 'Gemini'})"
+        else:
+            mode = "Keyword search"
+        if self.use_llm and self.use_embeddings:
+            mode += f" + LLM ({'Groq' if llm_backend == 'groq' else 'Gemini'})"
         print(f"ComplianceChecker инициализирован. Режим: {mode}")
 
     def _get_embed_model(self):
@@ -334,22 +352,19 @@ class ComplianceChecker:
             query_emb = embed_model.encode(query, convert_to_tensor=True)
 
             best_score = 0.0
-            negation_found = False
-
+            # Предложения с отрицанием не участвуют в cosine (не считаем «справка отсутствует» доказательством).
+            # Нельзя помечать всё требование как «НЕ НАЙДЕНО» из‑за отрицания в другом месте документа —
+            # в типовых PDF часто встречаются «при отсутствии…», «перечень отсутствующих…» и т.п.
             for sentence in sentences:
                 s_lower = sentence.lower()
                 if any(neg in s_lower for neg in self.NEGATION_WORDS):
-                    negation_found = True
                     continue
                 sent_emb = embed_model.encode(sentence, convert_to_tensor=True)
                 score = util.cos_sim(query_emb, sent_emb).item()
                 if score > best_score:
                     best_score = score
 
-            if negation_found:
-                status = "НЕ НАЙДЕНО"
-                evidence = "Обнаружено отрицание в тексте"
-            elif best_score >= threshold:
+            if best_score >= threshold:
                 status = "ВЫПОЛНЕНО"
                 evidence = f"cosine={best_score:.3f}"
             else:
@@ -408,6 +423,98 @@ class ComplianceChecker:
         return self._build_report(rules, checks, disqualifiers)
 
     def _check_with_llm(self, documents_text: str, rules: dict) -> list[CheckResult]:
+        if self.llm_backend == "groq":
+            return self._check_with_llm_groq(documents_text, rules)
+        return self._check_with_llm_gemini(documents_text, rules)
+
+    def _check_with_llm_groq(self, documents_text: str, rules: dict) -> list[CheckResult]:
+        from ml.llm_routing import groq_chat
+
+        requirements_text = "\n".join([
+            f"{r['id']}. [{r['source']}] {r['text']} (КРИТИЧНО: {'ДА' if r['critical'] else 'НЕТ'})"
+            for r in rules["requirements"]
+        ])
+
+        system_prompt = """Ты — юридический аналитик Министерства сельского хозяйства РК.
+Твоя задача: проверить пакет документов сельхозпредприятия на соответствие
+Правилам субсидирования (Приказ МСХ РК № 108 от 15.03.2019, ред. 2023).
+
+ИНСТРУКЦИИ:
+- Проверяй каждое требование независимо
+- "ВЫПОЛНЕНО" — только если есть ЯВНОЕ подтверждение в документах
+- "ЧАСТИЧНО" — если есть упоминание но не полная информация
+- "НЕ НАЙДЕНО" — если в документах нет никаких следов этого требования
+- "ПРЕДУПРЕЖДЕНИЕ" — есть документ, но с потенциальной проблемой (просроченный, неполный)
+- Цитируй конкретный фрагмент из документов как доказательство
+
+Отвечай ТОЛЬКО валидным JSON без markdown, преамбул и постамбул."""
+
+        user_message = f"""Проверь документы на соответствие требованиям для субсидии:
+"{rules['name']}"
+
+ТРЕБОВАНИЯ ДЛЯ ПРОВЕРКИ:
+{requirements_text}
+
+ТЕКСТ ДОКУМЕНТОВ:
+---
+{documents_text[:30000]}
+---
+
+Верни JSON в ТОЧНО таком формате:
+{{
+  "checks": [
+    {{
+      "id": "R-01",
+      "status": "ВЫПОЛНЕНО",
+      "evidence": "Найдено: учетный номер хозяйства 12345678 в справке от акимата"
+    }},
+    {{
+      "id": "R-02",
+      "status": "НЕ НАЙДЕНО",
+      "evidence": "В представленных документах отсутствуют сведения о земельных участках"
+    }}
+  ]
+}}"""
+
+        try:
+            response_text = groq_chat(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                temperature=0.15,
+                max_tokens=8192,
+            )
+
+            json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
+            if json_match:
+                llm_result = json.loads(json_match.group())
+            else:
+                llm_result = json.loads(response_text)
+
+            llm_checks = {c["id"]: c for c in llm_result.get("checks", [])}
+
+            results = []
+            for req in rules["requirements"]:
+                llm_check = llm_checks.get(req["id"], {})
+                status = llm_check.get("status", "НЕ НАЙДЕНО")
+                evidence = llm_check.get("evidence", "Данные не извлечены LLM")
+
+                results.append(CheckResult(
+                    requirement_id=req["id"],
+                    requirement_text=req["text"],
+                    status=status,
+                    status_emoji=self._status_emoji(status),
+                    found_evidence=evidence,
+                    is_critical=req["critical"],
+                    source=req["source"],
+                ))
+
+            return results
+
+        except Exception as e:
+            print(f"⚠️ LLM Groq недоступен ({e}), переключаюсь на keyword-режим")
+            return self._check_with_keywords(documents_text, rules)
+
+    def _check_with_llm_gemini(self, documents_text: str, rules: dict) -> list[CheckResult]:
         import google.generativeai as genai
 
         genai.configure(api_key=self.api_key)
@@ -732,9 +839,28 @@ def run_compliance_check(
     direction: str,
     gemini_api_key: Optional[str] = None,
     use_embeddings: bool = True,
+    llm_backend: Optional[str] = None,
 ) -> dict:
+    from ml.llm_routing import primary_cloud_llm
+
     subsidy_type_key = detect_subsidy_type(subsidy_name, direction)
-    checker = ComplianceChecker(gemini_api_key=gemini_api_key, use_embeddings=use_embeddings)
+    gm = (gemini_api_key or os.getenv("GEMINI_API_KEY") or "").strip()
+    gq = (os.getenv("GROQ_API_KEY") or "").strip()
+    want = (llm_backend or primary_cloud_llm()).strip().lower()
+    if want == "groq" and gq:
+        effective = "groq"
+    elif want == "gemini" and gm:
+        effective = "gemini"
+    elif want == "none":
+        effective = "none"
+    else:
+        effective = "groq" if gq else ("gemini" if gm else "none")
+
+    checker = ComplianceChecker(
+        gemini_api_key=gm if effective == "gemini" else None,
+        use_embeddings=use_embeddings,
+        llm_backend=effective,
+    )
     report = checker.check(documents_text, subsidy_type_key)
 
     total_checks   = len(report.checks)

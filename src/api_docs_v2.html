@@ -74,6 +74,8 @@
                     <li><a href="#score-docs">POST /api/v1/score-with-documents</a></li>
                     <li><a href="#applications">GET /api/v1/applications</a></li>
                     <li><a href="#decision">POST /api/v1/decision</a></li>
+                    <li><a href="#expert-verify">POST /api/v1/applications/…/expert-verify</a></li>
+                    <li><a href="#training-samples">GET /api/v1/training-samples</a></li>
                 </ul>
             </nav>
         </aside>
@@ -170,6 +172,18 @@
                 </table>
                 <h3>Пример</h3>
                 <div class="code">curl -X POST http://localhost:8003/api/v1/decision \<br>  -H "Content-Type: application/json" \<br>  -H "X-API-Key: sk-msgov-2025-demo-key-abc123" \<br>  -d '{"application_id":"A7F2B1C0","decision":"approved","comment":"Соответствует критериям, рекомендовано к одобрению"}'</div>
+                <div class="info"><strong>Data loop:</strong> после успешного POST заявка получает <code>is_verified=1</code> в БД; решение пишется в <code>verified_payload.commission_decision</code>.</div>
+            </section>
+            <section id="expert-verify" class="section">
+                <div class="endpoint"><span class="method post">POST</span><span class="path">/api/v1/applications/{application_id}/expert-verify</span></div>
+                <p>Явная проверка экспертом: <code>is_verified=1</code>, произвольный JSON правок в <code>verified_payload</code>.</p>
+                <div class="code">curl -X POST http://localhost:8003/api/v1/applications/A7F2B1C0/expert-verify \<br>  -H "Content-Type: application/json" \<br>  -H "X-API-Key: sk-msgov-2025-demo-key-abc123" \<br>  -d '{"comment":"ОК","verified_payload":{"corrected_zone":"yellow","note":"ручная правка"}}'</div>
+            </section>
+            <section id="training-samples" class="section">
+                <div class="endpoint"><span class="method get">GET</span><span class="path">/api/v1/training-samples</span></div>
+                <p>Все заявки с <code>is_verified=1</code> (для XGBoost). Query: <code>?zone=red</code> — только красная зона.</p>
+                <div class="code">curl "http://localhost:8003/api/v1/training-samples?zone=red" \<br>  -H "X-API-Key: sk-msgov-2025-demo-key-abc123"</div>
+                <div class="warn"><strong>SQLite:</strong> файл <code>data/applications.sqlite</code> в корне проекта — можно открыть в DB Browser for SQLite и выполнить <code>SELECT * FROM applications WHERE score_zone = 'red';</code></div>
             </section>
             <section class="section">
                 <h2>Зоны скоринга</h2>

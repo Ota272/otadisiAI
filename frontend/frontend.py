@@ -17,6 +17,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from ml.llm_routing import expert_opinion_available
 from ml.shap_integration import generate_gemini_expert_opinion
 from frontend.locales import t as _t
 
@@ -31,36 +32,40 @@ def T(key, override_lang=None):
     return _t(key, L)
 
 def _load_env_vars():
-    env_path = ROOT_DIR / ".env"
+    """Load .env from repo root, then from frontend/ (Streamlit cwd may differ)."""
+    env_paths = [
+        ROOT_DIR / ".env",
+        Path(__file__).resolve().parent / ".env",
+    ]
 
     try:
-        from dotenv import load_dotenv                
-        if env_path.exists():
-            load_dotenv(dotenv_path=env_path, override=False)
-            return str(env_path)
+        from dotenv import load_dotenv
+        for env_path in env_paths:
+            if env_path.exists():
+                load_dotenv(dotenv_path=env_path, override=False)
+        return
     except Exception:
         pass
 
-    if not env_path.exists():
-        return None
-
-    try:
-        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, val = line.split("=", 1)
-            key = key.strip()
-            val = val.strip().strip("'").strip('"')
-            if key and key not in os.environ:
-                os.environ[key] = val
-        return str(env_path)
-    except Exception:
-        return None
+    for env_path in env_paths:
+        if not env_path.exists():
+            continue
+        try:
+            for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key = key.strip()
+                val = val.strip().strip("'").strip('"')
+                if key and key not in os.environ:
+                    os.environ[key] = val
+        except Exception:
+            pass
 
 _load_env_vars()
 
-API_BASE = os.getenv("SMARTAGRO_API_BASE", "http://localhost:8003")
+API_BASE = os.getenv("SMARTAGRO_API_BASE", "http://localhost:8000")
 API_KEY = os.getenv("SMARTAGRO_API_KEY", "sk-msgov-2025-demo-key-abc123")
 HEADERS = {"x-api-key": API_KEY}
 
@@ -1398,7 +1403,6 @@ with tab3:
             </div>
             """, unsafe_allow_html=True)
 
-            gemini_key = os.getenv("GEMINI_API_KEY", "")
             opinion_key = f"gemini_opinion_{selected_id}"
 
             if opinion_key not in st.session_state:
@@ -1417,9 +1421,12 @@ with tab3:
             col_btn, col_status_g = st.columns([1, 3])
             with col_btn:
                 if st.button(T("profile_gemini_btn"), use_container_width=True, key=f"gemini_btn_{selected_id}"):
-                    if gemini_key:
+                    if expert_opinion_available():
                         with st.spinner(T("profile_gemini_spinner")):
-                            opinion = generate_gemini_expert_opinion(app, gemini_key)
+                            opinion = generate_gemini_expert_opinion(
+                                app,
+                                os.getenv("GEMINI_API_KEY"),
+                            )
                             st.session_state[opinion_key] = opinion
                     else:
                         st.warning(T("profile_gemini_warn_key"))

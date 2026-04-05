@@ -16,32 +16,36 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 def _load_env_vars():
-    env_path = _REPO_ROOT / ".env"
+    """Корень репозитория, затем frontend/.env (часто там лежит GEMINI при запуске только uvicorn)."""
+    env_paths = [
+        _REPO_ROOT / ".env",
+        _REPO_ROOT / "frontend" / ".env",
+    ]
 
     try:
-        from dotenv import load_dotenv                
-        if env_path.exists():
-            load_dotenv(dotenv_path=env_path, override=False)
-            return str(env_path)
+        from dotenv import load_dotenv
+        for env_path in env_paths:
+            if env_path.exists():
+                load_dotenv(dotenv_path=env_path, override=False)
+        return
     except Exception:
         pass
 
-    if not env_path.exists():
-        return None
-
-    try:
-        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, val = line.split("=", 1)
-            key = key.strip()
-            val = val.strip().strip("'").strip('"')
-            if key and key not in os.environ:
-                os.environ[key] = val
-        return str(env_path)
-    except Exception:
-        return None
+    for env_path in env_paths:
+        if not env_path.exists():
+            continue
+        try:
+            for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key = key.strip()
+                val = val.strip().strip("'").strip('"')
+                if key and key not in os.environ:
+                    os.environ[key] = val
+        except Exception:
+            pass
 
 _ENV_LOADED_FROM = _load_env_vars()
 
@@ -51,7 +55,13 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from ml.shap_integration import ScoringEngine, extract_features_from_documents, extract_text_from_pdf, generate_gemini_expert_opinion
+from ml.llm_routing import expert_opinion_available, primary_cloud_llm
+from ml.shap_integration import (
+    ScoringEngine,
+    extract_features_from_documents_auto,
+    extract_text_from_pdf,
+    generate_gemini_expert_opinion,
+)
 from ml.compliance_checker import run_compliance_check, detect_subsidy_type
 from src.store import applications_store
 
@@ -155,6 +165,23 @@ class DecisionRequest(BaseModel):
     application_id: str
     decision: str = Field(..., description="approved | rejected | review")
     comment: Optional[str] = None
+
+
+class ExpertVerifyRequest(BaseModel):
+    """Правки эксперта для Data Learning Loop (попадают в verified_payload и is_verified)."""
+    verified_payload: Optional[dict] = None
+    comment: Optional[str] = Field(
+        None,
+        description="Краткий комментарий; будет записан в verified_payload.expert_comment",
+    )
+
+
+def _merge_verified_payload(app: dict, fragment: dict) -> None:
+    cur = app.get("verified_payload")
+    base = dict(cur) if isinstance(cur, dict) else {}
+    base.update(fragment)
+    app["verified_payload"] = base
+
 
 DIRECTION_CODE_MAP = {
     "Субсидирование в скотоводстве": 0,
@@ -651,6 +678,9 @@ def _build_score_response(
         "doc_weight_used":       0.0,
         "manual_review_required": False,
         "zone":                  result["zone"],
+        "score_zone":            result["zone"],
+        "final_score":           float(result["score"]),
+        "is_verified":           0,
         "zone_label":            result["zone_label"],
         "recommendation":        result["recommendation"],
         "verdict":               result["verdict"],
@@ -772,6 +802,63 @@ async def _gemini_ocr_pdfs(pdf_items: list[tuple[str, bytes]], api_key: str) -> 
 
     return "\n\n".join(results), None
 
+
+def _groq_ocr_pdfs_sync(pdf_items: list[tuple[str, bytes]]) -> tuple[str, str | None]:
+    import fitz
+    from ml.llm_routing import groq_vision_ocr_page
+
+    results: list[str] = []
+    try:
+        max_pages = max(1, int(os.getenv("GROQ_OCR_MAX_PAGES", "4")))
+    except ValueError:
+        max_pages = 4
+
+    for fname, pdf_bytes in pdf_items:
+        try:
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            try:
+                n = min(max_pages, doc.page_count)
+                parts: list[str] = []
+                for i in range(n):
+                    page = doc.load_page(i)
+                    w, h = page.rect.width, page.rect.height
+                    scale = min(2.0, 1200.0 / max(w, h, 1.0))
+                    mat = fitz.Matrix(scale, scale)
+                    pix = page.get_pixmap(matrix=mat, alpha=False)
+                    png = pix.tobytes("png")
+                    text = groq_vision_ocr_page(
+                        png_bytes=png,
+                        prompt=(
+                            "Извлеки весь читаемый текст с изображения страницы документа. "
+                            "Сохраняй порядок строк, числа и даты. "
+                            "Выводи только текст документа, без комментариев."
+                        ),
+                    )
+                    if text:
+                        parts.append(text)
+                if parts:
+                    joined = "\n\n".join(parts)
+                    results.append(f"=== {fname} ===\n{joined}")
+                    print(f"[groq_ocr] '{fname}': {len(joined)} симв. с {n} стр.")
+            finally:
+                doc.close()
+        except Exception as exc:
+            print(f"[groq_ocr] Ошибка для '{fname}': {exc}")
+
+    note = None
+    if pdf_items and not results:
+        note = (
+            "Groq Vision OCR не вернул текст (проверьте GROQ_OCR_MODEL, лимиты или качество скана)."
+        )
+    return "\n\n".join(results), note
+
+
+async def _groq_ocr_pdfs(pdf_items: list[tuple[str, bytes]]) -> tuple[str, str | None]:
+    import asyncio
+
+    return await asyncio.to_thread(_groq_ocr_pdfs_sync, pdf_items)
+
+
 @app.post("/api/v1/score-with-documents", tags=["Scoring"],
           summary="Скоринг + LLM-анализ PDF документов")
 async def score_with_documents(
@@ -828,84 +915,81 @@ async def score_with_documents(
                 text = content.decode("utf-8", errors="ignore")
                 all_texts.append(f"=== {doc.filename} ===\n{text}")
 
-        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        gemini_api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+        groq_key = (os.getenv("GROQ_API_KEY") or "").strip()
+        doc_backend = primary_cloud_llm()
         missing = [item for item in pdf_items
                    if not any(item[0] in t for t in all_texts)]
 
-        if missing and gemini_api_key:
-            print(f"[gemini_ocr] локальные движки не дали текст по {len(missing)} файл(ам) — пробуем Gemini Files API…")
-            ocr_text, ocr_note = await _gemini_ocr_pdfs(missing, gemini_api_key)
+        if missing:
+            ocr_text, ocr_note = "", None
+            if doc_backend == "groq" and groq_key:
+                print(f"[groq_ocr] локально нет текста по {len(missing)} PDF — Groq Vision…")
+                ocr_text, ocr_note = await _groq_ocr_pdfs(missing)
+            elif gemini_api_key:
+                print(f"[gemini_ocr] локально нет текста по {len(missing)} PDF — Gemini Files API…")
+                ocr_text, ocr_note = await _gemini_ocr_pdfs(missing, gemini_api_key)
+            elif groq_key:
+                print(f"[groq_ocr] fallback: Groq Vision для {len(missing)} PDF (нет GEMINI_API_KEY)…")
+                ocr_text, ocr_note = await _groq_ocr_pdfs(missing)
+
             extraction_note = ocr_note
-            if ocr_text.strip():
+            if (ocr_text or "").strip():
                 all_texts.append(ocr_text)
-                print(f"[gemini_ocr] получено {len(ocr_text)} симв. через Gemini OCR")
-        elif not gemini_api_key and missing:
-            extraction_note = (
-                f"GEMINI_API_KEY не задан — {len(missing)} файл(ов) без локального текста не обработаны облаком."
-            )
-            print(f"[gemini_ocr] GEMINI_API_KEY не задан — {len(missing)} сканированных файл(ов) пропущены")
+                print(f"[cloud_ocr] добавлено {len(ocr_text)} симв.")
+            elif not groq_key and not gemini_api_key:
+                extraction_note = (
+                    f"Нет GROQ_API_KEY и GEMINI_API_KEY — {len(missing)} файл(ов) со сканами без текстового слоя не распознаны."
+                )
+                print("[cloud_ocr] нет ключей для облачного OCR")
 
         if all_texts:
             combined_text = "\n\n".join(all_texts)
             MAX_CHARS = 60_000
             combined_text_llm = combined_text[:MAX_CHARS] if len(combined_text) > MAX_CHARS else combined_text
             print(f"[docs] итого текст: {len(combined_text)} → {len(combined_text_llm)} симв. для LLM")
+            _llm_doc = "Groq" if (doc_backend == "groq" and groq_key) else (
+                "Gemini" if gemini_api_key else ("Groq" if groq_key else "нет")
+            )
+            print(f"[docs] облачный LLM для документов (LLM_PROVIDER / ключи): {_llm_doc}")
 
             rx_pre = _regex_scoring_features_from_text(combined_text_llm)
             if rx_pre:
                 _merge_extracted_doc_features(feature_dict, rx_pre, source_tag="REGEX_PRE")
                 print(f"[docs] regex (до LLM): {rx_pre}")
 
-            if gemini_api_key:
-                extraction = extract_features_from_documents(combined_text_llm, gemini_api_key)
-                llm_summary = extraction.get("llm_summary")
-                doc_features = extraction.get("features") or {}
-                if doc_features:
-                    _merge_extracted_doc_features(feature_dict, doc_features, source_tag="GEMINI")
-                if extraction.get("extraction_status") != "success":
-                    print(
-                        f"[docs] Gemini JSON-извлечение: {extraction.get('extraction_status')} "
-                        f"(полей в ответе: {len(doc_features)})"
-                    )
+            extraction = extract_features_from_documents_auto(combined_text_llm)
+            llm_summary = extraction.get("llm_summary")
+            doc_features = extraction.get("features") or {}
+            if doc_features:
+                _merge_extracted_doc_features(feature_dict, doc_features, source_tag="LLM_DOC")
+            if extraction.get("extraction_status") != "success":
+                print(
+                    f"[docs] JSON-извлечение из PDF: {extraction.get('extraction_status')} "
+                    f"(полей в ответе: {len(doc_features)})"
+                )
 
-                if doc_features.get("has_vet_passport") == 1.0:
-                    vc0 = feature_dict.get("veterinary_compliance")
-                    try:
-                        base_vc = float(vc0) if vc0 is not None else 0.88
-                    except (TypeError, ValueError):
-                        base_vc = 0.88
-                    feature_dict["veterinary_compliance"] = min(1.0, base_vc + 0.05)
-                    print(f"[docs] has_vet_passport: veterinary_compliance скорректировано до {feature_dict['veterinary_compliance']}")
+            if doc_features.get("has_vet_passport") == 1.0:
+                vc0 = feature_dict.get("veterinary_compliance")
+                try:
+                    base_vc = float(vc0) if vc0 is not None else 0.88
+                except (TypeError, ValueError):
+                    base_vc = 0.88
+                feature_dict["veterinary_compliance"] = min(1.0, base_vc + 0.05)
+                print(f"[docs] has_vet_passport: veterinary_compliance скорректировано до {feature_dict['veterinary_compliance']}")
 
             rx_post = _regex_scoring_features_from_text(combined_text_llm)
             if rx_post:
-                # force=True: REGEX_POST deterministic values override any Gemini guess
                 _merge_extracted_doc_features(
                     feature_dict, rx_post, source_tag="REGEX_POST", force=True
                 )
-                print(f"[docs] REGEX_POST (приоритет над Gemini): {rx_post}")
+                print(f"[docs] REGEX_POST (приоритет над LLM): {rx_post}")
 
     _impute_missing_model_features(feature_dict, tag="IMPUTE_DOC")
     result = engine.score_farmer(feature_dict, llm_context=llm_summary)
     base_score = result["score"]
 
-    # LLM expert opinion — только для объяснения, не влияет на скор
     llm_expert_opinion = None
-    if combined_text.strip():
-        gemini_api_key_expert = os.getenv("GEMINI_API_KEY", "")
-        if gemini_api_key_expert:
-            try:
-                llm_expert_opinion = generate_gemini_expert_opinion(
-                    {
-                        **result,
-                        "compliance": None,  # будет добавлен ниже
-                        "documents_text_chars": len(combined_text),
-                        "documents_extracted_ok": bool(combined_text.strip()),
-                    },
-                    gemini_api_key_expert,
-                )
-            except Exception as e:
-                print(f"LLM expert opinion ошибка: {e}")
 
     compliance_report   = None
     final_score         = base_score
@@ -915,18 +999,12 @@ async def score_with_documents(
     manual_review_flag  = False
 
     if combined_text.strip():
-        gemini_api_key_compliance = os.getenv("GEMINI_API_KEY", "")
-
-        # Если есть Gemini → LLM + embeddings вместе считают Doc Score
-        # Если нет → только embeddings
-        use_llm_for_score = bool(gemini_api_key_compliance)
-
         compliance_report = run_compliance_check(
             documents_text=combined_text_llm,
             subsidy_name=features.subsidy_type,
             direction=features.direction,
-            gemini_api_key=gemini_api_key_compliance if use_llm_for_score else None,
-            use_embeddings=True,  # embeddings всегда
+            gemini_api_key=os.getenv("GEMINI_API_KEY"),
+            use_embeddings=True,
         )
 
         score_doc = float(compliance_report.get("overall_score_pct", 50.0))
@@ -969,7 +1047,7 @@ async def score_with_documents(
     _doc_text_store = (combined_text[:_MAX_DOC_TEXT_STORE] if combined_text.strip() else None)
     if not combined_text.strip() and documents and not extraction_note:
         extraction_note = (
-            "Текст из PDF не извлечён: возможно только изображения-сканы без слоя текста и квота Gemini исчерпана."
+            "Текст из PDF не извлечён: возможно сканы без текстового слоя; проверьте GROQ_API_KEY (OCR) или GEMINI_API_KEY."
         )
 
     response_data = {
@@ -985,6 +1063,9 @@ async def score_with_documents(
         "doc_weight_used":        round(doc_weight, 2),
         "manual_review_required": manual_review_flag,
         "zone":                   final_zone,
+        "score_zone":             final_zone,
+        "final_score":            float(final_score),
+        "is_verified":            0,
         "zone_label":             final_zone_label,
         "recommendation":         final_recommendation,
 
@@ -1015,6 +1096,16 @@ async def score_with_documents(
         "source_system":          features.source_system,
         "is_demo":                False,
     }
+
+    if combined_text.strip() and expert_opinion_available():
+        try:
+            llm_expert_opinion = generate_gemini_expert_opinion(
+                response_data,
+                os.getenv("GEMINI_API_KEY"),
+            )
+            response_data["llm_expert_opinion"] = llm_expert_opinion
+        except Exception as e:
+            print(f"LLM expert opinion ошибка: {e}")
 
     _register_application(response_data)
     return response_data
@@ -1063,10 +1154,67 @@ def record_decision(
                 "decided_at":      record["decided_at"],
                 "officer_comment": decision_req.comment,
             })
+            _merge_verified_payload(
+                app,
+                {
+                    "commission_decision": {
+                        "decision": decision_req.decision,
+                        "comment": decision_req.comment,
+                        "decided_at": record["decided_at"],
+                    }
+                },
+            )
+            app["is_verified"] = 1
             _persist_application_update(app)
             break
 
     return record
+
+
+@app.post(
+    "/api/v1/applications/{application_id}/expert-verify",
+    tags=["Applications"],
+    summary="Отметить заявку проверенной экспертом",
+)
+def expert_verify_application(
+    application_id: str,
+    body: ExpertVerifyRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """Ставит is_verified=1 и сохраняет JSON правок; строка попадает в get_training_data / training-samples."""
+    for app in _applications_db:
+        if app.get("application_id") == application_id:
+            fragment = dict(body.verified_payload or {})
+            if body.comment is not None:
+                fragment.setdefault("expert_comment", body.comment)
+            fragment["verified_at"] = datetime.now().isoformat()
+            _merge_verified_payload(app, fragment)
+            app["is_verified"] = 1
+            _persist_application_update(app)
+            return app
+    raise HTTPException(status_code=404, detail="Заявка не найдена")
+
+
+@app.get(
+    "/api/v1/training-samples",
+    tags=["Analytics"],
+    summary="Выборка для обучения (проверенные заявки)",
+)
+def list_training_samples(
+    api_key: str = Depends(verify_api_key),
+    zone: Optional[str] = None,
+):
+    """
+    Все заявки с is_verified=1; при zone=green|yellow|red — только эта зона.
+    Проверка без SQL: сравните count с ожиданием после expert-verify / decision.
+    """
+    items = applications_store.get_training_data(zone=zone)
+    return {
+        "zone_filter": zone,
+        "count": len(items),
+        "items": items,
+    }
+
 
 @app.post("/api/v1/giss/sync", tags=["Demo"], summary="Сгенерировать тестовые заявки")
 def sync_demo_applications(

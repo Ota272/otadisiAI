@@ -7,6 +7,7 @@ shap==0.45.0
 numpy==1.26.4
 pandas==2.2.2
 google-generativeai>=0.7.0
+openai>=1.40.0
 pdfplumber==0.11.0
 pypdf==4.2.0
 PyMuPDF==1.24.14

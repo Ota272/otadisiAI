@@ -1,5 +1,8 @@
 
 import json
+import os
+import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -448,13 +451,8 @@ def _strip_markdown_json_fence(s: str) -> str:
     return t
 
 
-def extract_features_from_documents(documents_text: str, api_key: str) -> dict:
-    import google.generativeai as genai
-    from google.generativeai.types import GenerationConfig
-
-    genai.configure(api_key=api_key)
-
-    system_prompt = """Ты — аналитик Министерства сельского хозяйства РК.
+def _doc_feature_system_prompt() -> str:
+    return """Ты — аналитик Министерства сельского хозяйства РК.
 Твоя задача: извлечь структурированные факты из документов сельхозпредприятия
 для системы скоринга субсидий. Числа для ML должны совпадать по смыслу с полями модели.
 
@@ -490,7 +488,9 @@ def extract_features_from_documents(documents_text: str, api_key: str) -> dict:
   "llm_summary": "<1-2 предложения: ключевые выводы по документам>"
 }"""
 
-    user_message = f"""Проанализируй следующие документы сельхозпредприятия и извлеки данные:
+
+def _doc_feature_user_message(documents_text: str) -> str:
+    return f"""Проанализируй следующие документы сельхозпредприятия и извлеки данные:
 
 ---НАЧАЛО ДОКУМЕНТОВ---
 {documents_text}
@@ -498,32 +498,20 @@ def extract_features_from_documents(documents_text: str, api_key: str) -> dict:
 
 Верни только JSON с извлечёнными данными. Если данных нет — ставь null."""
 
-    try:
-        model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
-            system_instruction=system_prompt,
-        )
-        generation_config = GenerationConfig(
-            response_mime_type="application/json",
-            temperature=0.15,
-        )
-        message = model.generate_content(
-            user_message,
-            generation_config=generation_config,
-        )
-        response_text = _strip_markdown_json_fence((message.text or "").strip())
-        if not response_text:
-            return {
-                "features": {},
-                "llm_summary": None,
-                "extraction_status": "empty_model_response",
-            }
 
+def _parse_doc_features_llm_response(response_text: str, unknown_log_tag: str) -> dict:
+    response_text = _strip_markdown_json_fence((response_text or "").strip())
+    if not response_text:
+        return {
+            "features": {},
+            "llm_summary": None,
+            "extraction_status": "empty_model_response",
+        }
+
+    try:
         try:
             extracted = json.loads(response_text)
         except json.JSONDecodeError:
-            import re
-
             json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
             if not json_match:
                 raise
@@ -544,7 +532,7 @@ def extract_features_from_documents(documents_text: str, api_key: str) -> dict:
 
         unknown = [k for k in extracted.keys() if k not in DOC_FEATURE_KEYS]
         if unknown:
-            print(f"[extract_features_from_documents] Пропускаю неизвестные ключи Gemini: {unknown}")
+            print(f"[extract_features_from_documents] Пропускаю неизвестные ключи ({unknown_log_tag}): {unknown}")
         extracted = {k: v for k, v in extracted.items() if k in DOC_FEATURE_KEYS}
 
         return {
@@ -559,12 +547,85 @@ def extract_features_from_documents(documents_text: str, api_key: str) -> dict:
             "llm_summary": None,
             "extraction_status": f"json_parse_error: {e}",
         }
+
+
+def extract_features_from_documents(documents_text: str, api_key: str) -> dict:
+    import google.generativeai as genai
+    from google.generativeai.types import GenerationConfig
+
+    genai.configure(api_key=api_key)
+    system_prompt = _doc_feature_system_prompt()
+    user_message = _doc_feature_user_message(documents_text)
+
+    try:
+        model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash",
+            system_instruction=system_prompt,
+        )
+        generation_config = GenerationConfig(
+            response_mime_type="application/json",
+            temperature=0.15,
+        )
+        message = model.generate_content(
+            user_message,
+            generation_config=generation_config,
+        )
+        return _parse_doc_features_llm_response((message.text or "").strip(), "Gemini")
     except Exception as e:
         return {
             "features": {},
             "llm_summary": None,
             "extraction_status": f"api_error: {e}",
         }
+
+
+def extract_features_from_documents_groq(documents_text: str) -> dict:
+    from ml.llm_routing import groq_chat
+
+    system_prompt = _doc_feature_system_prompt()
+    user_message = _doc_feature_user_message(documents_text)
+    try:
+        raw = groq_chat(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            temperature=0.15,
+            max_tokens=8192,
+        )
+        return _parse_doc_features_llm_response(raw, "Groq")
+    except Exception as e:
+        return {
+            "features": {},
+            "llm_summary": None,
+            "extraction_status": f"api_error: {e}",
+        }
+
+
+def extract_features_from_documents_auto(documents_text: str) -> dict:
+    """Groq или Gemini по LLM_PROVIDER / ключам (см. ml/llm_routing.py)."""
+    from ml.llm_routing import primary_cloud_llm
+
+    backend = primary_cloud_llm()
+    gq = (os.getenv("GROQ_API_KEY") or "").strip()
+    gm = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if backend == "groq" and gq:
+        return extract_features_from_documents_groq(documents_text)
+    if backend == "gemini" and gm:
+        return extract_features_from_documents(documents_text, gm)
+    if backend == "none":
+        return {
+            "features": {},
+            "llm_summary": None,
+            "extraction_status": "no_cloud_llm",
+        }
+    if gq:
+        return extract_features_from_documents_groq(documents_text)
+    if gm:
+        return extract_features_from_documents(documents_text, gm)
+    return {
+        "features": {},
+        "llm_summary": None,
+        "extraction_status": "no_cloud_llm",
+    }
 
 def extract_text_from_pdf(pdf_path: str) -> str:
     max_pages = 40
@@ -609,134 +670,174 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     except Exception:
         return ""
 
-def generate_gemini_expert_opinion(app_data: dict, api_key: str) -> str:
-    import google.generativeai as genai
-    genai.configure(api_key=api_key)
+
+def _is_gemini_quota_error(exc: BaseException) -> bool:
+    s = str(exc).lower()
+    return "429" in str(exc) or "quota" in s or "resource exhausted" in s or "resourceexhausted" in type(exc).__name__.lower()
+
+
+def _gemini_429_retry_delay(exc: BaseException) -> float:
+    m = re.search(r"retry in ([0-9.]+)\s*s", str(exc), re.I)
+    if m:
+        return min(120.0, float(m.group(1)) + 3.0)
+    return 25.0
+
+
+def _expert_chat_completion(
+    *,
+    api_key: str,
+    base_url: Optional[str],
+    model: str,
+    system_prompt: str,
+    user_message: str,
+) -> str:
+    """OpenAI-совместимый Chat Completions (OpenAI, Groq, локальный прокси и т.д.)."""
+    try:
+        from openai import OpenAI
+    except ImportError as ie:
+        raise RuntimeError("Установите пакет openai: pip install openai") from ie
+    kwargs = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    client = OpenAI(**kwargs)
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        temperature=0.2,
+        max_tokens=4096,
+    )
+    text = (resp.choices[0].message.content or "").strip()
+    if not text:
+        raise RuntimeError("Пустой ответ модели")
+    return text
+
+
+def _expert_opinion_via_groq(system_prompt: str, user_message: str) -> str:
+    """Бесплатный tier Groq (отдельная квота от Gemini). Ключ: https://console.groq.com/keys"""
+    gkey = os.getenv("GROQ_API_KEY", "").strip()
+    if not gkey:
+        raise RuntimeError("GROQ_API_KEY не задан")
+    model = (os.getenv("GROQ_EXPERT_MODEL") or "llama-3.1-8b-instant").strip()
+    return _expert_chat_completion(
+        api_key=gkey,
+        base_url="https://api.groq.com/openai/v1",
+        model=model,
+        system_prompt=system_prompt,
+        user_message=user_message,
+    )
+
+
+def _expert_opinion_via_openai(system_prompt: str, user_message: str) -> str:
+    """Платный OpenAI или совместимый endpoint (OPENAI_API_BASE)."""
+    okey = os.getenv("OPENAI_API_KEY", "").strip()
+    if not okey:
+        raise RuntimeError("OPENAI_API_KEY не задан")
+    model = (os.getenv("OPENAI_EXPERT_MODEL") or "gpt-4o-mini").strip()
+    base = os.getenv("OPENAI_API_BASE", "").strip() or None
+    return _expert_chat_completion(
+        api_key=okey,
+        base_url=base,
+        model=model,
+        system_prompt=system_prompt,
+        user_message=user_message,
+    )
+
+
+def generate_gemini_expert_opinion(app_data: dict, api_key: Optional[str] = None) -> str:
+    from ml.llm_routing import expert_opinion_provider
 
     rules_summary = """
-=== ПРАВИЛА СУБСИДИРОВАНИЯ МСХ РК ===
-Источник: Приказ Министра сельского хозяйства РК № 108 от 15.03.2019
-Редакция: Приказ № 332 от 18.09.2023 (введён с 01.01.2024)
+=== НОРМАТИВНАЯ БАЗА: СУБСИДИРОВАНИЕ ПЛЕМЕННОГО ЖИВОТНОВОДСТВА (РК) ===
+Базовый акт: Приказ Министра сельского хозяйства РК от 15.03.2019 № 108 «Правила субсидирования развития
+племенного животноводства, повышения продуктивности и качества продукции животноводства»;
+зарегистрирован в МЮ РК 20.03.2019 № 18404; отменён приказ № 256 от 15.06.2018 (Правила 2018 года).
+Преамбула и понятия актуализировались приказами, в т.ч.: № 207 от 13.07.2021; № 332 от 18.09.2023 (ред. Правил
+с 01.01.2024); № 331 от 30.09.2024; № 217 от 25.06.2024; № 189 от 04.06.2025 (цель субсидирования п. 1-1,
+определение «субсидирование», корректировки п. 2); № 352 от 03.10.2025 (в т.ч. п. 16 подтверждение ЭСФ с 01.01.2026,
+п. 17–18 спецкомиссия и мониторинг мощностей); № 428 от 18.11.2025 (Приложение 1 — нормативы, п. 6 распределение).
+Актуальные редакции проверять по опубликованному тексту на eGov/Әділет.
 
---- ПРИЛОЖЕНИЕ 1: НОРМАТИВЫ СУБСИДИЙ ---
+--- СВЯЗАННЫЙ АКТ: НОРМЫ ЕСТЕСТВЕННОЙ УБЫЛИ (ПАДЕЖА) ---
+Приказ Министра СХ РК от 03.12.2015 № 3-3/1061 (МЮ № 12488, введён со 02.06.2016). Используется при толковании
+обязательств «кроме норм естественного убыли (падежа)»: допустимые доли падежа по видам (примеры):
+КРС мясное направление — импорт 1-й год после карантина: авиа 2,5%, авто >2000 км 5%, комбинированная морская+авто 7,5%;
+яловое маточное 5% от осеменённого/слученного; телята до отъёма 6–8 мес. 2%; молодняк на откорме до 15 мес. 2%;
+маточное поголовье (год) 2%. КРС молочное — импорт 3–9%; маточное 3%; телята до 20 суток 3,5% и др. по таблице приказа.
+МРС: взрослые овцы/козы 3%; ягнята/козлята до отъёма 4 мес. 5%; ремонтный молодняк до 18 мес. 2%; откорм 1%.
+Свиньи: поросята-сосуны до отъёма 12,5%; доращивание 5,2%; откорм 1%. Птица, рыба, пчёлы — свои табличные нормы в том же приказе.
+При оценке заявки сверяй фактическую «сохранность» с этими ориентирами: падеж в пределах нормы не равен нарушению обязательств.
 
-МЯСНОЕ И МЯСО-МОЛОЧНОЕ СКОТОВОДСТВО:
-- Племенной бык-производитель (отечественный): 260 000 ₸/голову
-- Племенное маточное поголовье КРС (отечественное): 260 000 ₸/голову
-- Племенное маточное поголовье КРС (из стран СНГ, Украины): 390 000 ₸/голову
-- Племенное маточное поголовье КРС (из Австралии, Америки, Европы): 525 000 ₸/голову
-- Выращивание племенного молодняка КРС мясного направления: 15 000 ₸/голову
-- Удешевление КРС мужской особи на откорм/убой: 300 ₸/кг живого веса
-- Удешевление реализованной говядины: 175 ₸/кг
+--- ГЛАВА 1. ЦЕЛИ И ПОНЯТИЯ (фрагмент) ---
+Цель (п. 1-1): развитие племенного животноводства, продуктивность и качество, доступность племенных животных и услуг,
+удешевление затрат на производство животноводческой продукции.
+Товаропроизводитель: физ./юр. лицо, производящее с/х продукцию; племенное хозяйство; племенной/дистрибьюторский центр;
+техник-осеменатор и др. по тексту п. 2.
+ГИСС — государственная информационная система субсидирования; заявка подписывается ЭЦП (п. 20–21).
+Маточное поголовье (возраст половозрелости по Правилам): КРС племенные от 13 мес, товарные от 18 мес; овцы от 12 мес;
+лошади от 36 мес; свиньи племенные/товарные от 8 мес, ремонтное от 4 мес.
+Целевое использование — воспроизводство в сроки и на условиях Правил.
+Откормочная площадка — с учётным номером по Правилам присвоения учётных номеров объектам (приказ МСХ № 7-1/37 от 23.01.2015, ЗРНУА № 10466).
+ИБСПР, ИСЖ, ИС ЭСФ, ЕГКН — как в Правилах. Аномальные погодные условия для кормов (п. 2 п. 1-1): засуха, град ≥20 мм,
+ливень ≥50 мм за 12 ч (в селеопасных регионах ≥30 мм за 12 ч) и др.
 
-МОЛОЧНОЕ И МОЛОЧНО-МЯСНОЕ СКОТОВОДСТВО:
-- Племенное маточное поголовье (отечественное): 350 000 ₸/голову
-- Племенное маточное поголовье (из СНГ, Украины): 390 000 ₸/голову
-- Племенное маточное поголовье (из Австралии, Америки, Европы): 700 000 ₸/голову
-- Удешевление производства молока, от 600 голов: 45 ₸/кг реализованного молока
-- Удешевление производства молока, от 400 голов: 30 ₸/кг
-- Удешевление производства молока, от 50 голов: 20 ₸/кг
-- СПК (сельхозкооператив): 20 ₸/кг
-- Эмбрионы КРС: 80 000 ₸/штуку
+--- ГЛАВА 2–3. БЮДЖЕТ, МИО, РЕГИСТРАЦИЯ ---
+Субсидии — из местного бюджета; МИО областей/г. респ. значения формируют объёмы по Приложению 1, согласуют с Министерством;
+перераспределение между видами при нехватке заявок; отчётность до 1 февраля (ф. 4-2, аналитика KPI животноводства) — п. 6.
+Регистрация в ГИСС: БИН/ИИН, наименование, руководитель, контакты, ИИК/БИК банка второго уровня.
+Подтверждение сделок: электронные счета-фактуры через ИС ЭСФ (интеграция с ГИСС); импорт — ТД или заявление о ввозе (НК, ЕАЭС).
+Встречные обязательства по валовой продукции АПК (п. 14-1) — при субсидиях от 100 млн ₸ в текущем году (проверять редакцию).
 
-СКОТОВОДСТВО (общее):
-- Искусственное осеменение КРС: 5 000 ₸/осеменённую голову
-- Семя племенного быка (однополое): 10 000 ₸/дозу
-- Семя племенного быка (двуполое): 5 000 ₸/дозу
+--- СПЕЦИАЛЬНАЯ КОМИССИЯ И МОЩНОСТИ (п. 17–18, ред. № 352) ---
+МИО создаёт комиссию по производственной мощности и инфраструктуре; заключение по форме Приложения 5; срок осмотра до 5 раб. дней
+(+5 по согласованию); в ГИСС — в течение 2 раб. дней после подписания; не менее 3 специалистов; сверка раз в 3 года и при смене критериев;
+ежегодный мониторинг; отзыв заключения при несоответствии или непредставлении документов/фото/видео; обжалование в суде.
 
-ОВЦЕВОДСТВО:
-- Отечественные племенные овцы: 26 000 ₸/голову
-- Импортные племенные маточные овцы: 52 000 ₸/голову
-- Импортные племенные бараны-производители: 260 000 ₸/голову
-- Выращивание племенного молодняка МРС: 4 000 ₸/голову
-- МРС мужской особи на откорм/убой: 3 000 ₸/голову
-- МРС мужской особи сезонные поставки: 7 000 ₸/голову
-- Эмбрионы овец: 80 000 ₸/штуку
-- Искусственное осеменение овец: 1 500 ₸/осеменённую голову
-- Тонкая/полутонкая шерсть (60 качество): 200 ₸/кг
-- Тонкая/полутонкая шерсть (50 качество): 150 ₸/кг
-- Грубая/полугрубая шерсть: 25 ₸/кг
+--- ГЛАВА 4. ЗАЯВКИ, ОЧЕРЕДЬ, ВЫПЛАТЫ ---
+Приём заявок по срокам Приложения 2 независимо от наличия лимита бюджета; ЭЦП товаропроизводителя (п. 20).
+МИО проверяет полноту за 2 раб. дня; одобренные — реестр/лист ожидания; очерёдность по дате-времени регистрации (п. 21).
+Отказ — мотивированно, основания п. 23 и п. 9 Перечня; частичная выплата при нехватке средств (п. 24-1); перенос на след. год (п. 24-2).
+Счета в «Казначейство-Клиент»; исправление реквизитов по заявлению.
 
-КОНЕВОДСТВО:
-- Ведение селекционной и племенной работы: 20 000 ₸/голову в год
-- Племенные жеребцы-производители продуктивного направления: 175 000 ₸/голову
+--- ГЛАВА 5. ЖАЛОБЫ ---
+Жалоба МИО — до 5 раб. дней; уполномоченный орган качества ГУ — до 15 (+10) раб. дней; досудебный порядок (АППК).
 
-ВЕРБЛЮДОВОДСТВО:
-- Племенные верблюды-производители: 175 000 ₸/голову
+--- П. 25. МОНИТОРИНГ РОСХ ---
+Ежеквартально в ГИСС раздел «Мониторинг исполнения обязательств»; при нарушении сохранности (кроме норм естественной убыли)
+и целевого использования — уведомление о возврате; возврат в местный бюджет за 90 раб. дней; новая заявка после погашения задолженности.
 
-СВИНОВОДСТВО:
-- Племенные свиньи: 100 000 ₸/голову
-- Удешевление свиней на убой: 2 000 ₸/голову
+--- ПРИЛОЖЕНИЕ 1: НОРМАТИВЫ (ключевые величины; уточнять редакцию № 428 и последующие) ---
+МЯСНОЕ / МЯСО-МОЛОЧНОЕ КРС: бык-производитель отеч. 260 000 ₸/гол.; матка отеч. 260 000; СНГ/Украина 390 000; Австралия/Америка/Европа 525 000;
+племенной молодняк мясного напр. 15 000 ₸/гол.; удешевление мужской особи на откорм/убой 300 ₸/кг ж.в.; говядина переработка 175 ₸/кг.
+МОЛОЧНОЕ: матка отеч. 350 000; СНГ/Украина 390 000; импорт Австралия/Америка/Европа 700 000; молоко: ≥600 голов 45 ₸/кг; ≥400 — 30; ≥50 — 20;
+СПК 20 ₸/кг; эмбрионы КРС 80 000 ₸/шт.
+ОБЩЕЕ СКОТОВОДСТВО: ИО КРС 5 000 ₸/осеменённую голову; семя быка однополое 10 000 ₸/дозу, двуполое 5 000 ₸/дозу.
+МЯСНОЕ ПТИЦЕВОДСТВО (актуальная таблица): племенной суточный молодняк родительской/прародительской формы 600 000 ₸/гол.;
+удешевление мяса курицы: при производстве от 15 000 т — 80 ₸/кг; от 10 000 т — 70; от 5 000 т — 60; от 500 т — 50 (реализация/перемещение на свои перерабатывающие мощности или в цеха).
+ЯИЧНОЕ: суточный молодняк финальной формы яичного направления от племенной птицы 60 000 ₸/гол.
+ОВЦЕВОДСТВО: овцы отеч. 26 000; импорт матки 52 000; бараны-производители импорт 260 000; молодняк МРС 4 000; откорм МРС 3 000 и 7 000 (сезонные поставки);
+эмбрионы 80 000; ИО овец 1 500 ₸; шерсть 200/150/25 ₸/кг по качеству.
+КОНИ / ВЕРБЛЮДЫ / СВИНЬИ / корма и прочее по МИО — как в таблице Приложения 1.
+Ограничения: субсидия на племенных животных не более 50% цены приобретения; производители — при наличии маточного поголовья
+(исключения для племцентров и откормплощадок с арендой быков).
 
-ПО РЕШЕНИЮ МИО (местных исполнительных органов):
-- Удешевление затрат на корма: устанавливается МИО
-- Племенное маточное поголовье коз: 70 000 ₸/голову
-- Кобылье молоко: 60 ₸/кг
-- Верблюжье молоко: 55 ₸/кг (возможно увеличение до 190 ₸/кг при доп. финансировании)
-- Мёд: 200 ₸/кг
+--- ПРИЛОЖЕНИЕ 2: КРИТЕРИИ (сжато, для экспертизы заявки) ---
+БЫК-ПРОИЗВОДИТЕЛЬ: учётный номер (не кооп. — см. текст); земли СХ назначения (исключения для СПК из ЛПХ); ИСЖ/ИБСПР матки и покупки;
+возраст быка 8–26 мес.; соотношение быков к маткам (вольная случка 1:20–30; докрытие при ИО 1:100); обязательство целевого использования
+до двух случных сезонов подряд (не менее 18 мес.); срок заявки 20.01–20.12, в пределах 12 мес. с покупки.
+МАТОЧНОЕ КРС: учётный номер; земли; ИБСПР/ИСЖ; возраст телок/нетелей (внутри РК и импорт — как в Правилах); обязательство ≥2 лет (кроме норм падежа); те же сроки подачи.
+МОЛОКО: учётный номер; земли; ≥50 голов фуражного маточного поголовья (23/28 мес. племенные/товарные); реализация на переработку с учётным номером;
+ежемесячно соматика в аккредитованных лабораториях (ИБСПР); положительное заключение спецкомиссии на МТФ; заявка в течение 6 мес. с оплаты за молоко.
+ОВЦЫ/БАРАНЫ: учётный номер; земли; ИСЖ/ИБСПР; возраст 4–18 мес.; обязательства 2 года / 2 сезона бараны; соотношения баранов к маткам (20–30; ИО 1:300; докрытие 1:100).
 
-ОГРАНИЧЕНИЯ (п. Приложения 1):
-- Субсидия не более 50% от стоимости приобретения племенных животных
-- Субсидирование племенных производителей — только при наличии маточного поголовья у товаропроизводителя (кроме племцентров и откормплощадок, передающих быков в аренду)
+--- ОТКАЗЫ (п. 22–23, Перечень) ---
+Несоответствие Приложению 2; неполные/некорректные документы; нет регистрации в ГИСС; задолженность по возврату субсидий; иные основания Перечня.
 
---- ПРИЛОЖЕНИЕ 2: КРИТЕРИИ К ТОВАРОПРОИЗВОДИТЕЛЯМ ---
-
-КРС МЯСНОЕ/МЯСО-МОЛОЧНОЕ — Приобретение быка-производителя:
-- Критерий 1: Наличие учётного номера хозяйства (кроме с/х кооперативов)
-- Критерий 2: Наличие земель сельскохозяйственного назначения (кроме СПК из личных подсобных хозяйств)
-- Критерий 3: Регистрация маточного поголовья в ИСЖ и ИБСПР на момент подачи заявки
-- Критерий 4: Регистрация приобретённого поголовья в ИСЖ и ИБСПР на момент подачи заявки
-- Критерий 5: Возраст быка на дату продажи (по племенному свидетельству) — 8–26 месяцев включительно
-- Критерий 6: Соотношение быков к маткам: вольная случка — 1 бык на 20–30 маток; докрытие при ИО — 1 бык на 100 маток
-- Критерий 7: Обязательство по целевому использованию — не более двух случных сезонов подряд (не менее 18 месяцев)
-- Срок подачи заявки: с 20 января до 20 декабря текущего года (в течение 12 месяцев с момента приобретения)
-
-КРС МЯСНОЕ/МОЛОЧНОЕ — Приобретение племенного маточного поголовья:
-- Критерий 1: Наличие учётного номера хозяйства
-- Критерий 2: Наличие земель сельскохозяйственного назначения
-- Критерий 3: Регистрация приобретённого поголовья в ИБСПР и ИСЖ на момент подачи заявки
-- Критерий 4: Возраст при приобретении внутри страны (по племенному свидетельству); при импорте — на момент карантина у экспортера: телки — 6–18 месяцев включительно; нетели — 13–26 месяцев включительно
-- Критерий 5: Обязательство по целевому использованию — не менее 2 лет (кроме норм естественного падежа)
-- Срок подачи: с 20 января до 20 декабря (в течение 12 месяцев с момента приобретения)
-
-МОЛОКО — Удешевление стоимости производства:
-- Критерий 1: Наличие учётного номера
-- Критерий 2: Наличие земель сельскохозяйственного назначения
-- Критерий 3: Регистрация в ИСЖ не менее 50 голов фуражного маточного поголовья в возрасте от 23 месяцев (племенные) / от 28 месяцев (товарные)
-- Критерий 4: Реализация молока на молокоперерабатывающее предприятие или цех, имеющий учётный номер
-- Критерий 5: Ежемесячные исследования проб молока на соматические клетки в аккредитованных лабораториях (результаты в ИБСПР)
-- Критерий 6: Положительное заключение специальной комиссии на молочно-товарную ферму
-- Срок подачи: с 20 января до 20 декабря (в течение 6 месяцев с момента оплаты за молоко)
-
-ОВЦЕВОДСТВО — Приобретение племенных овец и баранов-производителей:
-- Критерий 1: Наличие учётного номера (кроме СПК при приобретении баранов)
-- Критерий 2: Наличие земель сельскохозяйственного назначения
-- Критерий 3: Регистрация приобретённого поголовья в ИСЖ и ИБСПР
-- Критерий 4: Возраст при приобретении (внутри страны по племенному свидетельству; при импорте — на момент карантина): бараны и матки — 4–18 месяцев включительно
-- Критерий 5: Обязательство: маточное поголовье — не менее 2 лет; бараны — не менее 2 случных сезонов подряд (≥18 месяцев)
-- Критерий 6: Соотношение баранов к маткам: вольная/ручная случка — 1 баран на 20–30 маток; ИО — 1 баран на 300 маток; докрытие при ИО — 1 баран на 100 маток
-
---- ОБЩИЕ УСЛОВИЯ (Глава 3, пп. 11–14) ---
-- Получатели: физические и юридические лица, занимающиеся производством с/х продукции; племенные и дистрибьютерные центры; техники-осеменаторы
-- Регистрация в ГИСС с использованием ЭЦП обязательна (п. 12–13)
-- Обязательные сведения для регистрации: БИН/ИИН, наименование, ФИО руководителя, контактные данные, реквизиты текущего счёта банка второго уровня (ИИК, БИК)
-- Подтверждение приобретения — через ЭСФ (ИС ЭСФ), при импорте — таможенная декларация или заявление о ввозе (п. 16)
-- Встречные обязательства: рост/сохранение объёма валовой продукции АПК (п. 14-1), обязательны при субсидиях от 100 млн ₸ и более в текущем году
-- Мониторинг сохранности просубсидированного поголовья — ежеквартально РОСХ (п. 25)
-- При нарушении обязательств — возврат субсидий в местный бюджет в течение 90 рабочих дней
-
---- ОСНОВАНИЯ ДЛЯ ОТКАЗА (п. 23, Перечень п. 9) ---
-- Несоответствие заявки критериям Приложения 2
-- Неполнота или некорректность документов
-- Отсутствие регистрации в ГИСС
-- Наличие задолженности по возврату ранее полученных субсидий
-
---- ОБЛАСТИ И ГОРОДА РЕСПУБЛИКАНСКОГО ЗНАЧЕНИЯ РК (14 областей + 3 города) ---
-Акмолинская, Актюбинская, Алматинская, Атырауская, Восточно-Казахстанская,
-Жамбылская, Западно-Казахстанская, Карагандинская, Костанайская, Кызылординская,
-Мангистауская, Павлодарская, Северо-Казахстанская, Туркестанская,
-область Абай, Жетысуская область, Улытауская область,
-г. Алматы, г. Астана, г. Шымкент
+--- РЕГИОНЫ РК ДЛЯ ПРОВЕРКИ АНКЕТЫ ---
+Области: Акмолинская, Актюбинская, Алматинская, Атырауская, ВКО, Жамбылская, ЗКО, Карагандинская, Костанайская, Кызылординская,
+Мангистауская, Павлодарская, СКО, Туркестанская; области Абай, Жетісу, Ұлытау; гг. Алматы, Астана, Шымкент.
 """
 
     raw        = app_data.get("raw_features_used") or {}
@@ -769,57 +870,82 @@ def generate_gemini_expert_opinion(app_data: dict, api_key: str) -> str:
         _wrn = "; ".join(compliance.get("warnings", [])) or "нет"
         _dq = "; ".join(compliance.get("disqualifiers_found", [])) or "не найдены"
     else:
-        _cf = _wrn = _dq = "— (анализ документов не выполнялся)"
+        _cf = _wrn = _dq = "— (анализ документов не выполнялся или данные не переданы)"
+
+    _req_amt = app_data.get("requested_amount", 0)
+    try:
+        _req_amt_fmt = f"{float(_req_amt):,.0f} ₸"
+    except (TypeError, ValueError):
+        _req_amt_fmt = str(_req_amt)
+
+    _zone_disp = (app_data.get("zone") or "—")
+    if isinstance(_zone_disp, str) and _zone_disp not in ("—", ""):
+        _zone_disp = _zone_disp.upper()
 
     app_summary = f"""
-=== КРИТИЧЕСКИ ВАЖНО: ИСТОЧНИКИ ДАННЫХ (НЕ ПРОТИВОРЕЧЬ ЭТОМУ) ===
-1) Числовые признаки (блок «ПОКАЗАТЕЛИ ПРЕДПРИЯТИЯ») — фактический вход XGBoost после подстановки чисел из PDF (JSON + разбор текста) поверх анкеты.
-   При явном противоречии с дословной цитатой из PDF сначала считай возможной устаревшей записью в интерфейсе и запроси пересчёт заявки.
-2) SHAP (+/- баллы) — математическое объяснение вклада каждого признака в итоговый балл модели (SHAP TreeExplainer).
-   SHAP описывает модель, а не дословную цитату из PDF. Не пиши, что «все показатели отсутствуют», если блок ПОКАЗАТЕЛИ заполнен числами.
-3) Документы PDF: {doc_status_line}
-4) Если compliance-пустой или статус «документы не загружались» — это значит только отсутствие успешного анализа вложений, 
-   а НЕ отсутствие числовых данных для ML-скоринга. Не смешивай эти два утверждения в одном абзаце.
+=== SMARTAGRO SCORE: КАК УСТРОЕН РАСЧЁТ (НЕ ПУТАТЬ СЛОИ) ===
+1) XGBoost (балл ML / score_ml) — регрессия по 20 признакам после импутации пропусков; обучающий таргет в исторических данных —
+   historical_score. Признаки подмешиваются из анкеты, regex по PDF и (если задан GEMINI_API_KEY на API) JSON-извлечения Gemini.
+2) Документный слой (score_doc) — проверка соответствия Правилам по тексту PDF: семантические эмбеддинги (sentence-transformers)
+   + при наличии ключа Gemini возможна досылка отдельных требований через LLM; итог в процентах overall_score_pct / doc_completeness.
+3) Итоговый балл (score) = ml_weight_used * score_ml + doc_weight_used * score_doc (веса 0.30/0.70, 0.50/0.50 или 0.70/0.30
+   в зависимости от полноты документов). Зона green/yellow/red по порогам 80 и 50 от этого итога.
+4) SHAP — объяснение вклада признаков в предсказание XGBoost, не прямое «доказательство из PDF».
+5) PDF: {doc_status_line}
+6) Пустой compliance в этом запросе означает отсутствие блока проверки (нет текста или не передан контекст), а не автоматически
+   отсутствие чисел для ML.
 
-=== ДАННЫЕ АНАЛИЗИРУЕМОЙ ЗАЯВКИ ===
+=== ДАННЫЕ ЗАЯВКИ ===
 Предприятие: {app_data.get('company_name', '—')}
 БИН/ИИН: {app_data.get('bin_iin', '—')}
 Регион: {app_data.get('region', '—')}
 Вид субсидии: {app_data.get('subsidy_type', '—')}
 Направление: {app_data.get('direction', '—')}
-Запрошено: {app_data.get('requested_amount', 0):,.0f} ₸
-Источник заявки: {app_data.get('source_system', '—')}
+Запрошенная сумма: {_req_amt_fmt}
+Источник: {app_data.get('source_system', '—')}
+Версия модели: {app_data.get('model_version', '—')}
+Проверка экспертом (is_verified): {app_data.get('is_verified', '—')}
+Правки эксперта (verified_payload): {'есть JSON' if app_data.get('verified_payload') else '—'}
 
-ПОКАЗАТЕЛИ ПРЕДПРИЯТИЯ (вход модели XGBoost):
+ПОКАЗАТЕЛИ (raw_features_used → вход XGBoost после подготовки):
 - Лет в работе: {raw.get('years_in_operation', '—')}
 - Рост валовой продукции г/г: {raw.get('gross_output_growth_yoy', '—')}
 - Долговая нагрузка (Долг/EBITDA): {raw.get('debt_load_ratio', '—')}
 - Ветеринарное соответствие (0–1): {raw.get('veterinary_compliance', '—')}
-- Сохранность поголовья (0–1): {raw.get('historical_survival_rate', '—')}
+- Сохранность поголовья (0–1), модельный прокси: {raw.get('historical_survival_rate', '—')} (сверяй с нормами естественного падежа приказа 3-3/1061)
 - Доля племенного поголовья (0–1): {raw.get('pedigree_ratio', '—')}
 - Зависимость от субсидий (0–1): {raw.get('subsidy_dependence_index', '—')}
-- Обеспеченность землёй (га/голову): {raw.get('land_to_livestock_ratio', '—')}
-- Количество предыдущих субсидий: {raw.get('previous_subsidies_count', '—')}
-- Количество голов (расч.): {raw.get('livestock_count', '—')}
+- Земля на голову (га/гол.): {raw.get('land_to_livestock_ratio', '—')}
+- Отклонение от норматива выпаса: {raw.get('grazing_norm_deviation', '—')}
+- Риск естественной потери / климатический риск (модель): {raw.get('natural_loss_risk_score', '—')}
+- Предыдущие субсидии (раз): {raw.get('previous_subsidies_count', '—')}
+- Поголовье (расч.): {raw.get('livestock_count', '—')}
+- Племенное / производитель (флаги): is_pedigree={raw.get('is_pedigree', '—')}, is_producer={raw.get('is_producer', '—')}
 
-РЕЗУЛЬТАТЫ СКОРИНГОВОЙ МОДЕЛИ:
-- Итоговый балл (итог): {app_data.get('score', '—')} / 100
-- Балл XGBoost (ML): {app_data.get('score_ml', '—')} / 100
-- Балл документов (Gemini): {app_data.get('score_doc', 'не загружались')}
-- Веса: ML {app_data.get('ml_weight_used', 1.0):.0%} / Документы {app_data.get('doc_weight_used', 0.0):.0%}
-- Зона: {app_data.get('zone', '—').upper() if app_data.get('zone') else '—'}
-- Требуется ручная проверка: {'да' if app_data.get('manual_review_required') else 'нет'}
+РЕЗУЛЬТАТЫ СКОРИНГА:
+- Итоговый балл (score): {app_data.get('score', '—')} / 100
+- ML (score_ml): {app_data.get('score_ml', '—')} / 100
+- Документы (score_doc): {app_data.get('score_doc', '—')}
+- Веса: ML {float(app_data.get('ml_weight_used') or 1.0):.0%} / документы {float(app_data.get('doc_weight_used') or 0.0):.0%}
+- Зона: {_zone_disp}
+- Ручная проверка (manual_review_required): {'да' if app_data.get('manual_review_required') else 'нет'}
+
+Сверка суммы с нормативом (ориентир для эксперта): сопоставь requested_amount с «количество единиц × норматив из Приложения 1»
+по заявленному виду субсидии (голова/кг/доза/шт.).
 
 SHAP — положительные факторы: {'; '.join([f"{f['label']} ({f.get('shap_value',0):+.1f})" for f in shap_pos]) if shap_pos else 'не определены'}
 SHAP — отрицательные факторы: {'; '.join([f"{f['label']} ({f.get('shap_value',0):+.1f})" for f in shap_neg]) if shap_neg else 'не определены'}
 
-COMPLIANCE-ПРОВЕРКА ДОКУМЕНТОВ (только если был извлечён текст из PDF):
-- Статус: {compliance.get('overall_status') if compliance else 'не проводилась — нет текста из PDF'}
-- Выполнено требований: {compliance.get('overall_score_pct', '—') if compliance else '—'}%
-- Полнота документов: {compliance.get('doc_completeness', '—') if compliance else '—'}
+COMPLIANCE (чеклист по тексту PDF):
+- Статус: {compliance.get('overall_status') if compliance else 'не передан / не проводился'}
+- Выполнено (overall_score_pct): {compliance.get('overall_score_pct', '—') if compliance else '—'}%
+- Полнота документов (doc_completeness): {compliance.get('doc_completeness', '—') if compliance else '—'}
 - Критические нарушения: {_cf}
 - Предупреждения: {_wrn}
-- Дисквалифицирующие условия: {_dq}
+- Дисквалификаторы: {_dq}
+
+ОБУЧАЮЩИЙ КОНТУР (для справки эксперта): проверенные заявки помечаются is_verified=1 (POST /api/v1/decision или
+/api/v1/applications/{{id}}/expert-verify); выборка GET /api/v1/training-samples; в БД колонки score_zone, final_score, verified_payload.
 """
 
     _years_val  = raw.get("years_in_operation")
@@ -869,14 +995,29 @@ COMPLIANCE-ПРОВЕРКА ДОКУМЕНТОВ (только если был �
        явно это укажи и снизь вес этого флага в итоговом резюме."""
 
     _raw_doc = app_data.get("documents_extracted_text")
-    _doc_txt = (_raw_doc or "").strip()
+    _doc_full = (_raw_doc or "").strip()
+    _nchars_full = len(_doc_full)
+    try:
+        _expert_doc_limit = max(8_000, int(os.getenv("GEMINI_EXPERT_MAX_DOC_CHARS", "42000")))
+    except ValueError:
+        _expert_doc_limit = 42_000
+    _doc_txt = _doc_full
+    _trunc_meta = ""
+    if _nchars_full > _expert_doc_limit:
+        _h = (_expert_doc_limit * 2) // 3
+        _t = _expert_doc_limit - _h
+        _doc_txt = (
+            _doc_full[:_h]
+            + "\n\n[… фрагмент опущен для лимита токенов; сохранены начало и конец PDF …]\n\n"
+            + _doc_full[-_t:]
+        )
+        _trunc_meta = f" (~{_expert_doc_limit} симв. из {_nchars_full})"
     if len(_doc_txt) > 0:
-        _nchars = len(_doc_txt)
-        _trunc_note = ""
-        if _nchars >= 275_000:
-            _trunc_note = " (показан фрагмент до лимита хранения)"
+        _storage_note = ""
+        if _nchars_full >= 275_000:
+            _storage_note = " (в БД мог храниться усечённый фрагмент)"
         doc_block = f"""
-=== ТЕКСТ ИЗ PDF-ДОКУМЕНТОВ (извлечён при скоринге, {_nchars} симв.{_trunc_note}) ===
+=== ТЕКСТ ИЗ PDF-ДОКУМЕНТОВ (всего символов в системе: ~{_nchars_full}{_storage_note}{_trunc_meta}) ===
 Внимание: ниже — содержимое загруженных файлов. Используй для проверки полноты пакета и фактов.
 
 {_doc_txt}
@@ -897,12 +1038,86 @@ COMPLIANCE-ПРОВЕРКА ДОКУМЕНТОВ (только если был �
 Напиши экспертное заключение по данной заявке, строго опираясь на Правила субсидирования МСХ РК.
 Если выше есть текст PDF — обязательно включи в аргументы отсылки к фактам из этого текста (что именно видно в документах)."""
 
-    try:
-        model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            system_instruction=system_prompt,
+    provider = expert_opinion_provider()
+    if provider == "groq":
+        try:
+            return _expert_opinion_via_groq(system_prompt, user_message)
+        except Exception as e:
+            return f"Экспертное заключение (Groq) недоступно: {e}"
+    if provider in ("openai", "gpt", "chatgpt"):
+        try:
+            return _expert_opinion_via_openai(system_prompt, user_message)
+        except Exception as e:
+            return f"Экспертное заключение (OpenAI) недоступно: {e}"
+
+    import google.generativeai as genai
+
+    gkey = (api_key or os.getenv("GEMINI_API_KEY") or "").strip()
+    if not gkey:
+        return (
+            "Экспертное заключение (Gemini) недоступно: GEMINI_API_KEY не задан. "
+            "Для бесплатного варианта задайте GROQ_API_KEY и при необходимости EXPERT_OPINION_PROVIDER=groq."
         )
-        response = model.generate_content(user_message)
-        return response.text.strip()
-    except Exception as e:
-        return f"Экспертное заключение Gemini недоступно: {e}"
+    genai.configure(api_key=gkey)
+
+    model_name = (os.getenv("GEMINI_EXPERT_MODEL") or "gemini-2.0-flash").strip()
+    last_exc: Optional[BaseException] = None
+    for attempt in range(3):
+        try:
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=system_prompt,
+            )
+            response = model.generate_content(user_message)
+            return response.text.strip()
+        except Exception as e:
+            last_exc = e
+            if _is_gemini_quota_error(e) and attempt < 2:
+                time.sleep(_gemini_429_retry_delay(e))
+                continue
+            break
+
+    if last_exc is not None and _is_gemini_quota_error(last_exc):
+        if os.getenv("GROQ_API_KEY", "").strip():
+            try:
+                alt = _expert_opinion_via_groq(system_prompt, user_message)
+                return (
+                    alt
+                    + "\n\n────────────────────────────────────\n"
+                    + "Примечание: заключение через бесплатный резерв Groq (квота Gemini исчерпана). "
+                    + "Ключ: https://console.groq.com/keys — переменные GROQ_API_KEY, опционально GROQ_EXPERT_MODEL."
+                )
+            except Exception as e_g:
+                groq_err = e_g
+        else:
+            groq_err = None
+
+        if os.getenv("OPENAI_API_KEY", "").strip():
+            try:
+                alt = _expert_opinion_via_openai(system_prompt, user_message)
+                return (
+                    alt
+                    + "\n\n────────────────────────────────────\n"
+                    + "Примечание: резерв OpenAI (Gemini недоступен). Для бесплатного варианта используйте GROQ_API_KEY."
+                )
+            except Exception as e2:
+                parts = [f"Экспертное заключение Gemini недоступно: {last_exc}"]
+                if groq_err is not None:
+                    parts.append(f"Резерв Groq: {groq_err}")
+                parts.append(f"Резерв OpenAI: {e2}")
+                return "\n".join(parts)
+
+        if groq_err is not None:
+            return (
+                f"Экспертное заключение Gemini недоступно: {last_exc}\n"
+                f"Резерв Groq не сработал: {groq_err}\n"
+                "Проверьте ключ и модель (GROQ_EXPERT_MODEL, например llama-3.1-8b-instant) на https://console.groq.com/"
+            )
+
+    _tail = f"Экспертное заключение Gemini недоступно: {last_exc}"
+    if last_exc is not None and _is_gemini_quota_error(last_exc):
+        _tail += (
+            "\n\nБесплатный обход квоты Gemini: ключ Groq без оплаты — https://console.groq.com/keys → "
+            "добавьте в .env GROQ_API_KEY (или EXPERT_OPINION_PROVIDER=groq для только Groq)."
+        )
+    return _tail

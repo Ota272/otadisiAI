@@ -333,6 +333,40 @@ section[data-testid="stSidebar"] hr {
 .shap-pos .shap-val { color: var(--success); }
 .shap-neg .shap-val { color: var(--danger); }
 
+/* ── SHAP группы ── */
+.shap-group {
+    margin-bottom: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+}
+.shap-group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: #f4f6fb;
+    border-bottom: 1px solid var(--border);
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--primary);
+    cursor: pointer;
+    user-select: none;
+}
+.shap-group-header:hover { background: #e8eef8; }
+.shap-group-header .group-emoji { font-size: 16px; }
+.shap-group-header .group-count {
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: var(--border);
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+.shap-group-body { padding: 8px 10px; }
+
 /* ── Compliance чеклист ── */
 .compliance-block {
     background: var(--surface);
@@ -587,6 +621,55 @@ FEAT_LABELS_SHAP = {
     "hour_submitted": "Час подачи",
     "month_submitted": "Месяц подачи",
 }
+
+# ── Группировка факторов по категориям ──
+SHAP_GROUPS = [
+    {
+        "key": "finance",
+        "label": "Финансы",
+        "emoji": "💰",
+        "features": ["debt_load_ratio", "subsidy_dependence_index", "log_amount"],
+    },
+    {
+        "key": "production",
+        "label": "Производство",
+        "emoji": "🌾",
+        "features": [
+            "gross_output_growth_yoy", "pedigree_ratio", "historical_survival_rate",
+            "land_to_livestock_ratio", "livestock_count",
+        ],
+    },
+    {
+        "key": "vet_risks",
+        "label": "Ветеринария и риски",
+        "emoji": "🐄",
+        "features": ["veterinary_compliance", "natural_loss_risk_score", "grazing_norm_deviation"],
+    },
+    {
+        "key": "experience",
+        "label": "Опыт и история",
+        "emoji": "📋",
+        "features": ["years_in_operation", "previous_subsidies_count"],
+    },
+    {
+        "key": "context",
+        "label": "Контекст заявки",
+        "emoji": "📌",
+        "features": [
+            "direction_code", "region_encoded", "is_pedigree", "is_producer",
+            "hour_submitted", "month_submitted",
+        ],
+    },
+]
+
+def _build_feature_to_group():
+    mapping = {}
+    for group in SHAP_GROUPS:
+        for feat in group["features"]:
+            mapping[feat] = group["key"]
+    return mapping
+
+FEATURE_TO_GROUP = _build_feature_to_group()
 
 def _shap_max_abs(all_shap: dict) -> float:
     if not all_shap:
@@ -997,7 +1080,44 @@ with tab1:
     if not st.session_state.applications:
         st.info("Заявок нет. Нажмите «Тестовые заявки» или добавьте вручную.")
     else:
-        for app in st.session_state.applications:
+        apps_sorted = sorted(st.session_state.applications, key=lambda x: x.get("score", 0), reverse=True)
+
+        # ── Фильтры ──
+        all_regions = sorted(set(a.get("region", "") for a in apps_sorted if a.get("region")))
+        all_subsidies = sorted(set(a.get("subsidy_type", "") for a in apps_sorted if a.get("subsidy_type")))
+
+        filt_cols = st.columns([2, 2, 1, 1, 1])
+        with filt_cols[0]:
+            filt_region = st.selectbox("Область", ["Все"] + all_regions, index=0, key="filt_region", label_visibility="collapsed")
+        with filt_cols[1]:
+            filt_subsidy = st.selectbox("Вид субсидии", ["Все"] + all_subsidies, index=0, key="filt_subsidy", label_visibility="collapsed")
+        with filt_cols[2]:
+            filt_zone_label = st.selectbox("Зона", ["Все", "🟢 Green", "🟡 Yellow", "🔴 Red"], index=0, key="filt_zone", label_visibility="collapsed")
+            filt_zone = {"🟢 Green": "green", "🟡 Yellow": "yellow", "🔴 Red": "red"}.get(filt_zone_label)
+        with filt_cols[3]:
+            filt_decision_label = st.selectbox("Решение", ["Все", "✅ Одобрено", "❌ Отказано", "⏳ Ожидание"], index=0, key="filt_decision", label_visibility="collapsed")
+            filt_decision_map = {"✅ Одобрено": "approved", "❌ Отказано": "rejected", "⏳ Ожидание": "pending"}
+            filt_decision = filt_decision_map.get(filt_decision_label)
+        with filt_cols[4]:
+            filt_min_score = st.number_input("Мин. балл", min_value=0, max_value=100, value=0, step=5, key="filt_min_score", label_visibility="collapsed")
+
+        # Применяем фильтры
+        filtered = apps_sorted
+        if filt_region != "Все":
+            filtered = [a for a in filtered if a.get("region") == filt_region]
+        if filt_subsidy != "Все":
+            filtered = [a for a in filtered if a.get("subsidy_type") == filt_subsidy]
+        if filt_zone is not None:
+            filtered = [a for a in filtered if a.get("zone") == filt_zone]
+        if filt_decision is not None:
+            filtered = [a for a in filtered if st.session_state.decisions.get(a["application_id"], "") == filt_decision]
+        filtered = [a for a in filtered if a.get("score", 0) >= filt_min_score]
+
+        # Счётчик
+        if len(filtered) != len(apps_sorted):
+            st.caption(f"Найдено {len(filtered)} из {len(apps_sorted)} заявок")
+
+        for app in filtered:
             cat = app.get("zone", "yellow")
             icon = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(cat, "⚪")
             score = app.get("score", 0)
@@ -1077,12 +1197,46 @@ with tab2:
     if not apps_sorted:
         st.info("Заявок нет. Загрузите тестовые заявки или добавьте вручную.")
     else:
+        # ── Фильтры ──
+        all_regions = sorted(set(a.get("region", "") for a in apps_sorted if a.get("region")))
+        all_subsidies = sorted(set(a.get("subsidy_type", "") for a in apps_sorted if a.get("subsidy_type")))
+
+        filt_cols = st.columns([2, 2, 1, 1, 1])
+        with filt_cols[0]:
+            filt_region = st.selectbox("Область", ["Все"] + all_regions, index=0, key="filt2_region", label_visibility="collapsed")
+        with filt_cols[1]:
+            filt_subsidy = st.selectbox("Вид субсидии", ["Все"] + all_subsidies, index=0, key="filt2_subsidy", label_visibility="collapsed")
+        with filt_cols[2]:
+            filt_zone_label = st.selectbox("Зона", ["Все", "🟢 Green", "🟡 Yellow", "🔴 Red"], index=0, key="filt2_zone", label_visibility="collapsed")
+            filt_zone = {"🟢 Green": "green", "🟡 Yellow": "yellow", "🔴 Red": "red"}.get(filt_zone_label)
+        with filt_cols[3]:
+            filt_decision_label = st.selectbox("Решение", ["Все", "✅ Одобрено", "❌ Отказано", "⏳ Ожидание"], index=0, key="filt2_decision", label_visibility="collapsed")
+            filt_decision_map = {"✅ Одобрено": "approved", "❌ Отказано": "rejected", "⏳ Ожидание": "pending"}
+            filt_decision = filt_decision_map.get(filt_decision_label)
+        with filt_cols[4]:
+            filt_min_score = st.number_input("Мин. балл", min_value=0, max_value=100, value=0, step=5, key="filt2_min_score", label_visibility="collapsed")
+
+        # Применяем фильтры
+        filtered = apps_sorted
+        if filt_region != "Все":
+            filtered = [a for a in filtered if a.get("region") == filt_region]
+        if filt_subsidy != "Все":
+            filtered = [a for a in filtered if a.get("subsidy_type") == filt_subsidy]
+        if filt_zone is not None:
+            filtered = [a for a in filtered if a.get("zone") == filt_zone]
+        if filt_decision is not None:
+            filtered = [a for a in filtered if st.session_state.decisions.get(a["application_id"], "") == filt_decision]
+        filtered = [a for a in filtered if a.get("score", 0) >= filt_min_score]
+
+        # Счётчик
+        if len(filtered) != len(apps_sorted):
+            st.caption(f"Найдено {len(filtered)} из {len(apps_sorted)} заявок")
 
         rows_html = ""
         cumulative = 0.0
         cutoff_drawn = False
 
-        for app in apps_sorted:
+        for app in filtered:
             app_id = app["application_id"]
             score = app.get("score", 0)
             cat = app.get("zone", "yellow")
@@ -1156,11 +1310,11 @@ with tab2:
         st.markdown(table_html, unsafe_allow_html=True)
 
         st.divider()
-        scores = [a["score"] for a in apps_sorted]
+        scores = [a["score"] for a in filtered]
         fig = go.Figure()
         colors = ["#1a7a4a" if s >= 80 else ("#e8a800" if s >= 50 else "#b5001f") for s in scores]
         fig.add_trace(go.Bar(
-            x=[a["company_name"][:20] for a in apps_sorted],
+            x=[a["company_name"][:20] for a in filtered],
             y=scores,
             marker_color=colors,
             text=[f"{s:.0f}" for s in scores],
@@ -1437,32 +1591,64 @@ with tab3:
 
                 shap_html = ""
                 if all_shap:
-                    ordered = sorted(all_shap.items(), key=lambda x: abs(float(x[1])), reverse=True)
-                    for fname, shap_raw in ordered:
-                        pts = _shap_to_display_points(float(shap_raw), max_abs, 20.0)
-                        direction = "positive" if float(shap_raw) > 0 else "negative"
-                        cls = "shap-pos" if direction == "positive" else "shap-neg"
-                        sign = "+" if pts > 0 else ""
-                        label = FEAT_LABELS_SHAP.get(fname, fname)
-                        src = expl_by_feature.get(fname)
-                        if src:
-                            explanation = src.get("explanation", "")
-                            raw_hint = src.get("raw_value", raw_for_shap.get(fname))
-                        else:
-                            explanation = (
-                                f"Значение признака в модели: {raw_for_shap.get(fname, '—')}. "
-                                f"Вклад в итоговый балл (SHAP): {float(shap_raw):+.3f} в шкале модели."
-                            )
-                            raw_hint = raw_for_shap.get(fname)
+                    # Собираем факторы по группам
+                    grouped = {g["key"]: [] for g in SHAP_GROUPS}
+                    for fname, shap_raw in all_shap.items():
+                        gkey = FEATURE_TO_GROUP.get(fname, "context")
+                        grouped[gkey].append((fname, float(shap_raw)))
+
+                    # Сортируем внутри группы по абсолютному вкладу
+                    for gkey in grouped:
+                        grouped[gkey].sort(key=lambda x: abs(x[1]), reverse=True)
+
+                    # Рендерим только группы, в которых есть факторы
+                    for group in SHAP_GROUPS:
+                        gkey = group["key"]
+                        items = grouped.get(gkey, [])
+                        if not items:
+                            continue
+
+                        group_total = sum(v for _, v in items)
+                        group_sign = "+" if group_total > 0 else ""
+
                         shap_html += f"""
-                        <div class="shap-item {cls}">
-                            <span class="shap-val">{sign}{pts} б.</span>
-                            <div>
-                                <div style="font-weight:600;">{label}</div>
-                                <div style="font-size:12px; color:#888;">{explanation}</div>
-                                <div style="font-size:11px; color:#aaa;">исходное значение: {raw_hint}</div>
-                            </div>
-                        </div>"""
+                        <div class="shap-group">
+                        <details open>
+                        <summary class="shap-group-header">
+                            <span class="group-emoji">{group['emoji']}</span>
+                            <span>{group['label']}</span>
+                            <span class="group-count">{len(items)} факт. | Σ {group_sign}{_shap_to_display_points(group_total, max_abs, 20.0)} б.</span>
+                        </summary>
+                        <div class="shap-group-body">"""
+
+                        for fname, shap_val in items:
+                            pts = _shap_to_display_points(shap_val, max_abs, 20.0)
+                            direction = "positive" if shap_val > 0 else "negative"
+                            cls = "shap-pos" if direction == "positive" else "shap-neg"
+                            sign = "+" if pts > 0 else ""
+                            label = FEAT_LABELS_SHAP.get(fname, fname)
+                            src = expl_by_feature.get(fname)
+                            if src:
+                                explanation = src.get("explanation", "")
+                                raw_hint = src.get("raw_value", raw_for_shap.get(fname))
+                            else:
+                                explanation = (
+                                    f"Значение признака в модели: {raw_for_shap.get(fname, '—')}. "
+                                    f"Вклад в итоговый балл (SHAP): {shap_val:+.3f} в шкале модели."
+                                )
+                                raw_hint = raw_for_shap.get(fname)
+                            shap_html += f"""
+                            <div class="shap-item {cls}">
+                                <span class="shap-val">{sign}{pts} б.</span>
+                                <div>
+                                    <div style="font-weight:600;">{label}</div>
+                                    <div style="font-size:12px; color:#888;">{explanation}</div>
+                                    <div style="font-size:11px; color:#aaa;">исходное значение: {raw_hint}</div>
+                                </div>
+                            </div>"""
+
+                        shap_html += "</div></details></div>"
+
                 if shap_html:
                     st.markdown(shap_html, unsafe_allow_html=True)
                 else:

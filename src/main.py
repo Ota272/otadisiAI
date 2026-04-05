@@ -708,7 +708,7 @@ async def _gemini_ocr_pdfs(pdf_items: list[tuple[str, bytes]], api_key: str) -> 
     import google.generativeai as genai
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-1.5-flash")
 
     uploaded_refs = []
     results       = []
@@ -891,6 +891,7 @@ async def score_with_documents(
 
     # LLM expert opinion — только для объяснения, не влияет на скор
     llm_expert_opinion = None
+    llm_citations = []  # Цитаты из PDF для SHAP-факторов
     if combined_text.strip():
         gemini_api_key_expert = os.getenv("GEMINI_API_KEY", "")
         if gemini_api_key_expert:
@@ -904,6 +905,14 @@ async def score_with_documents(
                     },
                     gemini_api_key_expert,
                 )
+                # Парсим цитаты из JSON ответа
+                try:
+                    import json as _json
+                    parsed = _json.loads(llm_expert_opinion)
+                    if isinstance(parsed, dict):
+                        llm_citations = parsed.get("citations", parsed.get("citations_list", []))
+                except Exception:
+                    pass
             except Exception as e:
                 print(f"LLM expert opinion ошибка: {e}")
 
@@ -997,6 +1006,7 @@ async def score_with_documents(
 
         "compliance": compliance_report,
         "llm_expert_opinion": llm_expert_opinion,  # только объяснение
+        "llm_citations": llm_citations,  # цитаты из PDF для SHAP-факторов
 
         "llm_document_analysis":  llm_summary,
         "documents_processed":    len(documents),
@@ -1005,6 +1015,9 @@ async def score_with_documents(
         "documents_pdf_count":    sum(
             1 for d in documents if d.filename and d.filename.lower().endswith(".pdf")
         ),
+        "documents_pdf_names":    [
+            d.filename for d in documents if d.filename and d.filename.lower().endswith(".pdf")
+        ],
         "documents_extracted_text": _doc_text_store,
         "documents_extraction_note": extraction_note,
         "requested_amount":       features.requested_amount,

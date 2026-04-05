@@ -16,7 +16,7 @@ FEATURE_LABELS = {
         "land_to_livestock_ratio":    "Обеспеченность пастбищами (Га/голова)",
         "historical_survival_rate":   "Сохранность поголовья (%)",
         "subsidy_dependence_index":   "Индекс зависимости от субсидий",
-        "veterinary_compliance":      "Ветеринарное соответствие",
+        "veterinary_compliancяe":      "Ветеринарное соответствие",
         "years_in_operation":         "Стаж работы предприятия (лет)",
         "pedigree_ratio":             "Доля племенного поголовья",
         "previous_subsidies_count":   "Количество предыдущих субсидий",
@@ -848,12 +848,31 @@ COMPLIANCE-ПРОВЕРКА ДОКУМЕНТОВ (только если был �
    г) Логику данных: противоречия между показателями (например, высокая долговая нагрузка + большая сумма запроса)
    д) Интерпретацию SHAP как вклада признаков модели (не как доказательства из PDF)
    е) Зависимость от субсидий и другие риски по числовым признакам
-6. Структура ответа (строго):
-   — Первый абзац: общий вывод (2–3 предложения)
-   — Нумерованный список конкретных аргументов (минимум 5 пунктов, максимум 8)
-   — Последний абзац: итоговая рекомендация с указанием возможности/невозможности выплаты
-7. Длина: 250–400 слов
-8. НЕ используй символы **, ##, *, — в начале строк и другой markdown-разметки
+6. Структура ответа (строго JSON, БЕЗ markdown-блоков):
+   {{
+     "conclusion": "<текст заключения: 250-400 слов, обычный текст без markdown>",
+     "citations": [
+       {{
+         "point_number": 1,
+         "quote": "<точная цитата из PDF документа, подтверждающая или опровергающая пункт>",
+         "line_number": <номер строки в PDF тексте, откуда взята цитата>,
+         "explanation": "<краткое пояснение, почему это важно>"
+       }}
+     ]
+   }}
+   
+   КРИТИЧНО ДЛЯ CITATIONS:
+   — В поле "conclusion" после каждого пункта/аргумента вставь маркер вида [CITATION:N] где N - номер пункта
+   — Пример: "1. Заявка превышает норматив субсидии. [CITATION:1] Сумма завышена на 25%."
+   — Для КАЖДОГО из 5-8 пунктов заключения ДОЛЖЕН быть маркер [CITATION:N]
+   — В массив "citations" для каждого point_number добавь соответствующую цитату из PDF
+   — Если PDF нет, citations может быть пустым, но conclusion всё равно должен быть написан
+   — quote: точная выдержка из текста PDF (1-3 предложения)
+   — line_number: номер строки в блоке "ТЕКСТ ИЗ PDF-ДОКУМЕНТОВ", где начинается цитата (считая от 1)
+   — Максимум 3 цитаты на один пункт (выбирай самые важные)
+   
+7. Длина conclusion: 250–400 слов
+8. В conclusion НЕ используй символы **, ##, *, — в начале строк и другой markdown-разметки
 9. Если в запросе есть блок «ТЕКСТ ИЗ PDF-ДОКУМЕНТОВ» с непустым содержимым — это реальное содержание файлов заявки.
    Обязан опереться на него: даты, номера, наименования, суммы. Запрещено писать, что документы «не читались» или «не проанализированы по тексту».
 10. Если блока текста PDF нет или он пуст — честно укажи, что заключение только по анкетным данным и скорингу, без разбора вложений.
@@ -875,11 +894,21 @@ COMPLIANCE-ПРОВЕРКА ДОКУМЕНТОВ (только если был �
         _trunc_note = ""
         if _nchars >= 275_000:
             _trunc_note = " (показан фрагмент до лимита хранения)"
+        
+        # Добавляем номера строк к тексту PDF для точного цитирования
+        lines = _doc_txt.split('\n')
+        numbered_lines = []
+        for i, line in enumerate(lines, 1):
+            numbered_lines.append(f"[{i:4d}] {line}")
+        numbered_text = '\n'.join(numbered_lines)
+        
         doc_block = f"""
 === ТЕКСТ ИЗ PDF-ДОКУМЕНТОВ (извлечён при скоринге, {_nchars} симв.{_trunc_note}) ===
 Внимание: ниже — содержимое загруженных файлов. Используй для проверки полноты пакета и фактов.
+ВАЖНО: Каждая строка имеет номер в квадратных скобках [  1], [  2] и т.д.
+При цитировании указывай номер строки, где начинается цитата.
 
-{_doc_txt}
+{numbered_text}
 === КОНЕЦ ТЕКСТА PDF ===
 """
     else:
@@ -895,14 +924,60 @@ COMPLIANCE-ПРОВЕРКА ДОКУМЕНТОВ (только если был �
 {doc_block}
 
 Напиши экспертное заключение по данной заявке, строго опираясь на Правила субсидирования МСХ РК.
-Если выше есть текст PDF — обязательно включи в аргументы отсылки к фактам из этого текста (что именно видно в документах)."""
+Если выше есть текст PDF — обязательно включи в аргументы отсылки к фактам из этого текста (что именно видно в документах).
+
+КРИТИЧНО: Верни ответ ТОЛЬКО в формате JSON с полями "conclusion" и "citations".
+Каждый пункт заключения должен иметь минимум одну цитату из PDF с точным указанием номера строки."""
 
     try:
+        from google.generativeai.types import GenerationConfig
+        
         model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
+            model_name="gemini-2.0-flash",
             system_instruction=system_prompt,
         )
-        response = model.generate_content(user_message)
-        return response.text.strip()
+        generation_config = GenerationConfig(
+            response_mime_type="application/json",
+            temperature=0.2,
+        )
+        response = model.generate_content(
+            user_message,
+            generation_config=generation_config,
+        )
+        
+        # Парсим JSON ответ
+        response_text = _strip_markdown_json_fence((response.text or "").strip())
+        if not response_text:
+            return "Экспертное заключение: пустой ответ от модели."
+        
+        try:
+            result = json.loads(response_text)
+        except json.JSONDecodeError:
+            import re
+            json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
+            if not json_match:
+                return f"Экспертное заключение (ошибка парсинга JSON): {response_text[:500]}"
+            result = json.loads(json_match.group())
+        
+        if not isinstance(result, dict):
+            return "Экспертное заключение: неверный формат ответа (не объект)."
+        
+        conclusion = result.get("conclusion", "")
+        citations = result.get("citations", [])
+        
+        # Формируем ответ с маркерами для цитат
+        if not citations:
+            return conclusion or "Экспертное заключение: нет данных для анализа."
+        
+        # Встраиваем маркеры цитат в текст заключения
+        # Формат: [CITATION:point_number] будет заменён на иконку скрепки на фронтенде
+        enriched_conclusion = conclusion
+        
+        # Добавляем информацию о цитатах в конец для фронтенда
+        result["enriched_conclusion"] = enriched_conclusion
+        result["citations_list"] = citations
+        
+        return json.dumps(result, ensure_ascii=False, indent=2)
+        
     except Exception as e:
         return f"Экспертное заключение Gemini недоступно: {e}"

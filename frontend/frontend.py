@@ -337,6 +337,8 @@ section[data-testid="stSidebar"] hr {
     border-radius: 8px;
     margin-bottom: 6px;
     font-size: 14px;
+    position: relative;
+    overflow: visible;
 }
 .shap-pos { background: #e8f8f0; border-left: 4px solid var(--success); }
 .shap-neg { background: #fff0f2; border-left: 4px solid var(--danger); }
@@ -350,7 +352,9 @@ section[data-testid="stSidebar"] hr {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 10px;
-    overflow: hidden;
+    overflow: visible;
+    position: relative;
+    z-index: 1;
 }
 .shap-group-header {
     display: flex;
@@ -376,7 +380,7 @@ section[data-testid="stSidebar"] hr {
     padding: 2px 8px;
     border-radius: 10px;
 }
-.shap-group-body { padding: 8px 10px; }
+.shap-group-body { padding: 8px 10px; overflow: visible; }
 
 /* ── Compliance чеклист ── */
 .compliance-block {
@@ -533,10 +537,208 @@ div.stButton > button:hover { transform: translateY(-1px); box-shadow: 0 4px 12p
     border-radius: 8px !important;
     border: 1.5px solid var(--border) !important;
 }
+
+/* ── Citation icons (скрепки) ── */
+.citation-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    margin: 0 3px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+    position: relative;
+    vertical-align: middle;
+    transition: all 0.2s ease;
+    z-index: 1;
+}
+.citation-icon:hover {
+    background: var(--primary);
+    transform: scale(1.15);
+    z-index: 999999;
+}
+.citation-icon svg {
+    width: 13px;
+    height: 13px;
+    fill: white;
+    pointer-events: none;
+}
+.citation-popup {
+    visibility: hidden;
+    opacity: 0;
+    position: absolute;
+    bottom: calc(100% + 12px);
+    left: 50%;
+    transform: translateX(-50%) translateY(5px);
+    background: white;
+    border: 2px solid var(--accent);
+    border-radius: 10px;
+    padding: 14px 16px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+    z-index: 999998;
+    min-width: 320px;
+    max-width: 550px;
+    transition: visibility 0s, opacity 0.2s ease, transform 0.2s ease;
+    pointer-events: none;
+}
+.citation-icon:hover .citation-popup {
+    visibility: visible;
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+    z-index: 999998;
+}
+.citation-popup::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 9px solid transparent;
+    border-top-color: var(--accent);
+}
+.citation-popup::before {
+    content: '';
+    position: absolute;
+    top: calc(100% + 1px);
+    left: 50%;
+    transform: translateX(-50%);
+    border: 8px solid transparent;
+    border-top-color: white;
+    z-index: 1;
+}
+.citation-popup-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+.citation-popup-header .icon {
+    font-size: 16px;
+}
+.citation-popup-header .title {
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--primary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.citation-quote {
+    background: #f4f6fb;
+    border-left: 4px solid var(--accent);
+    padding: 12px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: #222;
+    margin-bottom: 10px;
+    font-style: italic;
+    max-height: 200px;
+    overflow-y: auto;
+}
+.citation-line-number {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.citation-line-number::before {
+    content: '📄';
+    font-size: 12px;
+}
+.citation-explanation {
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.5;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+}
 </style>
 """
 
 st.markdown(CSS, unsafe_allow_html=True)
+
+# ── Поиск цитат из PDF для SHAP-факторов ──
+_SHAP_KEYWORDS = {
+    "debt_load_ratio": ["долг", "ebitda", "кредит", "заем", "долговая нагрузка"],
+    "subsidy_dependence_index": ["субсид", "зависимост", "дотаци", "поддержк"],
+    "gross_output_growth_yoy": ["рост", "валов", "продукци", "увеличен", "прирост"],
+    "pedigree_ratio": ["племен", "пород", "племенно поголов", "класс элит"],
+    "historical_survival_rate": ["сохранн", "выживаем", "падеж", "смертн", "гибель"],
+    "veterinary_compliance": ["ветеринар", "вет", "вакцин", "болезн", "инфекц", "анализ"],
+    "land_to_livestock_ratio": ["га/", "гектар", "пастбищ", "земель", "участок", "аренд"],
+    "years_in_operation": ["основан", "работает с", "стаж", "лет работы", "год создан"],
+    "previous_subsidies_count": ["субсид", "ранее получен", "предыдущ"],
+    "livestock_count": ["голов", "поголов", "стад", "крс", "овц", "лошад"],
+    "log_amount": ["сумм", "тенге", "стоимост", "цена"],
+    "grazing_norm_deviation": ["нагрузк", "пастбищ", "норм", "отклонен"],
+    "natural_loss_risk_score": ["риск", "падеж", "смертн", "естественн убыл"],
+}
+
+def _find_pdf_citations_for_shap(pdf_text: str, feature_name: str, pdf_names: list[str] | None = None) -> list[dict]:
+    """Ищет в тексте PDF цитаты, относящиеся к SHAP-фактору."""
+    if not pdf_text or not pdf_text.strip():
+        return []
+    
+    keywords = _SHAP_KEYWORDS.get(feature_name, [])
+    if not keywords:
+        return []
+    
+    lines = pdf_text.split('\n')
+    citations = []
+    
+    # Определяем к какому документу относится строка
+    # Формат: === filename.pdf ===
+    current_doc = None
+    doc_markers = {}  # line_num -> doc_name
+    
+    for i, line in enumerate(lines, 1):
+        import re
+        doc_match = re.match(r'^===\s+(.+\.pdf)\s+===$', line.strip(), re.IGNORECASE)
+        if doc_match:
+            current_doc = doc_match.group(1)
+        doc_markers[i] = current_doc
+    
+    for i, line in enumerate(lines, 1):
+        line_lower = line.lower()
+        # Пропускаем строки-разделители документов
+        if re.match(r'^===\s+.+\.pdf\s+===$', line.strip(), re.IGNORECASE):
+            continue
+        # Проверяем наличие хотя бы одного ключевого слова
+        if any(kw in line_lower for kw in keywords):
+            # Берём строку +/- 2 для контекста
+            start = max(0, i - 3)
+            end = min(len(lines), i + 2)
+            context = '\n'.join(lines[start:end]).strip()
+            if len(context) > 300:
+                context = context[:300] + "..."
+            
+            # Определяем имя документа
+            doc_name = doc_markers.get(i)
+            if not doc_name:
+                # Ищем ближайший документ выше
+                for prev_line in range(i - 1, 0, -1):
+                    if prev_line in doc_markers and doc_markers[prev_line]:
+                        doc_name = doc_markers[prev_line]
+                        break
+            
+            citations.append({
+                "line_number": i,
+                "quote": context,
+                "doc_name": doc_name or "Неизвестный документ",
+                "explanation": f"Найдено по ключевым словам: {', '.join(keywords[:3])}"
+            })
+            # Ограничиваем 2 цитатами
+            if len(citations) >= 2:
+                break
+    
+    return citations
 
 if "applications" not in st.session_state:
     st.session_state.applications = []
@@ -1427,6 +1629,62 @@ with tab3:
             opinion_text = st.session_state.get(opinion_key)
             if opinion_text:
                 verdict_color = {"green": "#1a7a4a", "yellow": "#b36200", "red": "#b5001f"}.get(cat, "#333")
+                
+                # Пытаемся распарсить JSON с цитатами
+                citations_data = None
+                conclusion_text = opinion_text
+                
+                try:
+                    parsed = json.loads(opinion_text)
+                    if isinstance(parsed, dict) and "conclusion" in parsed:
+                        conclusion_text = parsed.get("enriched_conclusion", parsed.get("conclusion", ""))
+                        citations_data = parsed.get("citations", parsed.get("citations_list", []))
+                except (json.JSONDecodeError, TypeError):
+                    # Это обычный текст (старый формат)
+                    pass
+                
+                # Заменяем маркеры [CITATION:N] на иконки скрепок
+                def render_citation_icon(point_num):
+                    """Создаёт HTML для иконки скрепки с popup."""
+                    if not citations_data:
+                        return ""
+                    
+                    # Находим цитаты для этого пункта
+                    point_citations = [c for c in citations_data if c.get("point_number") == point_num]
+                    if not point_citations:
+                        return ""
+                    
+                    # Берём первую цитату для отображения
+                    citation = point_citations[0]
+                    quote = citation.get("quote", "Цитата не найдена")
+                    line_num = citation.get("line_number", "N/A")
+                    explanation = citation.get("explanation", "")
+                    
+                    return f'''
+                    <span class="citation-icon">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v6c0 .55-.45 1-1 1s-1-.45-1-1V5c0-.28-.22-.5-.5-.5s-.5.22-.5.5v12.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V6c0-.55-.45-1-1-1s-1 .45-1 1z"/>
+                        </svg>
+                        <div class="citation-popup">
+                            <div class="citation-popup-header">
+                                <span class="icon">📎</span>
+                                <span class="title">Источник (строка {line_num})</span>
+                            </div>
+                            <div class="quote">"{quote}"</div>
+                            <div class="citation-line-number">Строка в документе: {line_num}</div>
+                            {f'<div class="citation-explanation">{explanation}</div>' if explanation else ''}
+                        </div>
+                    </span>
+                    '''
+                
+                # Заменяем все [CITATION:N] на иконки
+                import re
+                def replace_citation_marker(match):
+                    point_num = int(match.group(1))
+                    return render_citation_icon(point_num)
+                
+                conclusion_html = re.sub(r'\[CITATION:(\d+)\]', replace_citation_marker, conclusion_text)
+                
                 st.markdown(f"""
                 <div style="background:#f9faff; border:1.5px solid {verdict_color};
                      border-left: 5px solid {verdict_color};
@@ -1441,7 +1699,7 @@ with tab3:
                             {T('profile_gemini_source')}
                         </span>
                     </div>
-                    <div style="font-size:14px; line-height:1.8; color:#1a2340; white-space:pre-wrap;">{opinion_text}</div>
+                    <div style="font-size:14px; line-height:1.8; color:#1a2340; white-space:pre-wrap;">{conclusion_html}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -1569,6 +1827,10 @@ with tab3:
                 all_shap = app.get("all_shap_values") or {}
                 max_abs = _shap_max_abs(all_shap)
                 raw_for_shap = app.get("raw_features_used") or {}
+                
+                # Получаем текст PDF для поиска цитат
+                pdf_text = app.get("documents_extracted_text") or ""
+                pdf_names = app.get("documents_pdf_names") or []
 
                 shap_html = ""
                 if all_shap:
@@ -1618,15 +1880,75 @@ with tab3:
                                     f"Вклад в итоговый балл (SHAP): {shap_val:+.3f} в шкале модели."
                                 )
                                 raw_hint = raw_for_shap.get(fname)
-                            shap_html += f"""
-                            <div class="shap-item {cls}">
-                                <span class="shap-val">{sign}{pts} б.</span>
-                                <div>
-                                    <div style="font-weight:600;">{label}</div>
-                                    <div style="font-size:12px; color:#888;">{explanation}</div>
-                                    <div style="font-size:11px; color:#aaa;">исходное значение: {raw_hint}</div>
-                                </div>
-                            </div>"""
+                            
+                            # Ищем цитаты из PDF для этого фактора
+                            pdf_citations = _find_pdf_citations_for_shap(pdf_text, fname, pdf_names)
+
+                            # Формируем иконки скрепок для цитат (компактный HTML без переносов)
+                            citation_icons_html = ""
+                            if pdf_citations:
+                                for cit in pdf_citations:
+                                    cit_line = cit["line_number"]
+                                    cit_doc = cit.get("doc_name", "Неизвестный документ")
+                                    cit_quote = cit["quote"].replace('"', '&quot;').replace('\n', ' ').replace('<', '&lt;').replace('>', '&gt;')
+                                    cit_expl = cit["explanation"].replace('<', '&lt;').replace('>', '&gt;')
+                                    
+                                    # Ссылка на документ (если есть в списке)
+                                    doc_link = ""
+                                    if pdf_names and len(pdf_names) == 1:
+                                        # Один документ — просто показываем имя
+                                        doc_link = f'<div style="margin-top:6px; font-size:11px; color:#0072CE;">📎 {cit_doc}</div>'
+                                    elif pdf_names:
+                                        # Несколько документов — ищем индекс
+                                        doc_idx = None
+                                        for idx, pn in enumerate(pdf_names):
+                                            if pn in cit_doc or cit_doc in pn:
+                                                doc_idx = idx
+                                                break
+                                        if doc_idx is not None:
+                                            doc_link = f'<div style="margin-top:6px; font-size:11px; color:#0072CE;">📎 {cit_doc}</div>'
+                                        else:
+                                            doc_link = f'<div style="margin-top:6px; font-size:11px; color:#0072CE;">📎 {cit_doc}</div>'
+                                    else:
+                                        doc_link = f'<div style="margin-top:6px; font-size:11px; color:#0072CE;">📎 {cit_doc}</div>'
+                                    
+                                    citation_icons_html += (
+                                        f'<span class="citation-icon">'
+                                        f'<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v6c0 .55-.45 1-1 1s-1-.45-1-1V5c0-.28-.22-.5-.5-.5s-.5.22-.5.5v12.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V6c0-.55-.45-1-1-1s-1 .45-1 1z"/></svg>'
+                                        f'<div class="citation-popup">'
+                                        f'<div class="citation-popup-header"><span class="icon">📄</span><span class="title">{cit_doc} (строка {cit_line})</span></div>'
+                                        f'<div class="quote">"{cit_quote}"</div>'
+                                        f'<div class="citation-line-number">Строка в документе: {cit_line}</div>'
+                                        f'{doc_link}'
+                                        f'<div class="citation-explanation">{cit_expl}</div>'
+                                        f'</div></span>'
+                                    )
+
+                            # Если нет цитат — добавляем пояснение
+                            no_citation_note = ""
+                            if not pdf_citations and pdf_text.strip():
+                                no_citation_note = (
+                                    '<span style="font-size:10px; color:#bbb; margin-left:6px;" '
+                                    'title="В PDF не найдено прямых упоминаний этого показателя. '
+                                    'Значение взято из анкеты заявки или рассчитано моделью.">'
+                                    '⚠️ нет в PDF</span>'
+                                )
+                            elif not pdf_text.strip():
+                                no_citation_note = (
+                                    '<span style="font-size:10px; color:#bbb; margin-left:6px;" '
+                                    'title="PDF документы не загружены. Значение взято из анкеты.">'
+                                    '📄 нет PDF</span>'
+                                )
+
+                            shap_html += (
+                                f'<div class="shap-item {cls}">'
+                                f'<span class="shap-val">{sign}{pts} б.</span>'
+                                f'<div>'
+                                f'<div style="font-weight:600;">{label}{citation_icons_html}{no_citation_note}</div>'
+                                f'<div style="font-size:12px; color:#888;">{explanation}</div>'
+                                f'<div style="font-size:11px; color:#aaa;">исходное значение: {raw_hint}</div>'
+                                f'</div></div>'
+                            )
 
                         shap_html += "</div></details></div>"
 

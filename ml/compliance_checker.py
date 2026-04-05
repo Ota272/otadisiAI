@@ -2,7 +2,11 @@
 import json
 import re
 from dataclasses import dataclass, field as dc_field
+from pathlib import Path
 from typing import Optional
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+EMBED_MODEL_PATH = _REPO_ROOT / "models" / "embed_model"
 
 
 _OBLIGATION_REGEX = re.compile(
@@ -299,7 +303,12 @@ class ComplianceChecker:
     def _get_embed_model(self):
         if self._embed_model is None:
             from sentence_transformers import SentenceTransformer
-            self._embed_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+            if EMBED_MODEL_PATH.exists():
+                print(f"📦 Загружаю embed-модель локально из: {EMBED_MODEL_PATH}")
+                self._embed_model = SentenceTransformer(str(EMBED_MODEL_PATH))
+            else:
+                print(f"⚠️ Локальная модель не найдена, скачиваю из HF...")
+                self._embed_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
         return self._embed_model
 
     NEGATION_WORDS = [
@@ -430,7 +439,7 @@ class ComplianceChecker:
 
 ТЕКСТ ДОКУМЕНТОВ:
 ---
-{documents_text[:10000]}
+{documents_text[:30000]}
 ---
 
 Верни JSON в ТОЧНО таком формате:
@@ -495,6 +504,11 @@ class ComplianceChecker:
             req_id = req.get("id", "")
             found_keywords = [kw for kw in req["keywords"] if kw.lower() in text_lower]
 
+            # Проверяем отрицания в контексте найденных ключевых слов
+            negation_found = False
+            if found_keywords:
+                negation_found = self._check_negation_in_context(documents_text, req["keywords"])
+
             # For obligation requirements (R-05 / R-08), also run regex checks
             # that catch proximity of obligation words near timeframe words.
             regex_match = None
@@ -506,7 +520,11 @@ class ComplianceChecker:
                     if kw_match:
                         regex_match = kw_match  # flag as soft hit
 
-            if len(found_keywords) >= 2 or regex_match:
+            if negation_found:
+                # Ключевые слова найдены, но в контексте есть отрицание
+                status = "НЕ НАЙДЕНО"
+                evidence = f"Обнаружено отрицание: ключевые слова найдены, но документ подтверждает отсутствие"
+            elif len(found_keywords) >= 2 or regex_match:
                 status = "ВЫПОЛНЕНО"
                 if regex_match and not found_keywords:
                     evidence = (
@@ -536,6 +554,26 @@ class ComplianceChecker:
 
         return results
 
+    def _check_negation_in_context(self, text: str, keywords: list[str], window: int = 150) -> bool:
+        """Проверяет есть ли отрицание рядом с ключевыми словами."""
+        text_lower = text.lower()
+        for kw in keywords:
+            kw_lower = kw.lower()
+            start = 0
+            while True:
+                pos = text_lower.find(kw_lower, start)
+                if pos == -1:
+                    break
+                # Берём контекст ±window символов
+                ctx_start = max(0, pos - window)
+                ctx_end = min(len(text), pos + len(kw) + window)
+                context = text_lower[ctx_start:ctx_end]
+                # Проверяем отрицание в контексте
+                if any(neg in context for neg in self.NEGATION_WORDS):
+                    return True
+                start = pos + len(kw)
+        return False
+
     def _check_universal(self, documents_text: str) -> list[CheckResult]:
         text_lower = documents_text.lower()
         results = []
@@ -558,7 +596,16 @@ class ComplianceChecker:
         text_lower = documents_text.lower()
         found = []
         for disq in rules.get("disqualifiers", []):
-            if disq.lower() in text_lower:
+            disq_lower = disq.lower()
+            if disq_lower in text_lower:
+                # Проверяем нет ли отрицания рядом с дисквалификатором
+                pos = text_lower.find(disq_lower)
+                ctx_start = max(0, pos - 100)
+                ctx_end = min(len(text_lower), pos + len(disq_lower) + 50)
+                context = text_lower[ctx_start:ctx_end]
+                # Если рядом отрицание — это НЕ дисквалификатор
+                if any(neg in context for neg in self.NEGATION_WORDS):
+                    continue
                 found.append(disq)
         return found
 

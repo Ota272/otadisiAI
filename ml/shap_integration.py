@@ -20,6 +20,8 @@ FEATURE_LABELS = {
     "pedigree_ratio":             "Доля племенного поголовья",
     "previous_subsidies_count":   "Количество предыдущих субсидий",
     "debt_load_ratio":            "Долговая нагрузка (Долг/EBITDA)",
+    "grazing_norm_deviation":     "Отклонение нагрузки пастбищ от нормы",
+    "natural_loss_risk_score":    "Риск аномальной смертности",
     "log_amount":                 "Масштаб заявки (log суммы)",
     "livestock_count":            "Количество голов скота",
     "direction_code":             "Направление животноводства",
@@ -62,15 +64,44 @@ class ScoringEngine:
         print("🚀 Загружаю SmartAgro Scoring Engine...")
 
         self.model = joblib.load(models_dir / "xgb_scorer.joblib")
-
         self.scaler = joblib.load(models_dir / "scaler.joblib")
-
         self.explainer = joblib.load(models_dir / "shap_explainer.joblib")
 
         with open(models_dir / "feature_names.json", encoding="utf-8") as f:
             self.feature_names = json.load(f)
 
+        # Проверка что SHAP explainer соответствует модели
+        self._validate_shap_consistency()
+
         print(f"✅ Движок готов: {len(self.feature_names)} фичей, модель загружена")
+
+    def _validate_shap_consistency(self):
+        """Проверяет что SHAP explainer даёт те же предсказания что модель."""
+        try:
+            # Тестовый вектор из медиан
+            test_vals = [0.05, 6.0, 0.88, 0.25, 0.80, 8.0, 0.35, 3.0, 1.0, 0.0, 1.0, 14.0, 50.0, 0.0, 0.0, 0.0, 12.0, 6.0, 7.0]
+            X = pd.DataFrame([dict(zip(self.feature_names, test_vals))], columns=self.feature_names)
+            X_scaled = self.scaler.transform(X)
+
+            model_pred = self.model.predict(X_scaled)[0]
+            shap_base = getattr(self.explainer, "expected_value", 0.0)
+            # Извлекаем скаляр из 0-мерного массива, если нужно
+            if isinstance(shap_base, np.ndarray):
+                shap_base = shap_base.item()
+            shap_vals = self.explainer.shap_values(X_scaled)
+            if shap_vals.ndim == 2:
+                shap_vals = shap_vals[0]
+            shap_pred = float(shap_base) + sum(shap_vals)
+
+            diff = abs(model_pred - shap_pred)
+            if diff > 5.0:
+                print(f"⚠️ SHAP не сходится с моделью! Разница: {diff:.1f} баллов")
+                print(f"   Model pred: {model_pred:.1f}, SHAP pred: {shap_pred:.1f}")
+                print(f"   Рекомендуется пересохранить shap_explainer.joblib")
+            else:
+                print(f"✅ SHAP consistency OK (разница: {diff:.2f})")
+        except Exception as e:
+            print(f"⚠️ Не удалось проверить SHAP consistency: {e}")
 
     def score_farmer(
         self,
@@ -129,12 +160,38 @@ class ScoringEngine:
             "explainability": explainability,
         }
 
+    # Медианы для missing features (вместо 0.0 который даёт экстремальный outlier)
+    _FEATURE_MEDIANS = {
+        "gross_output_growth_yoy": 0.05,
+        "land_to_livestock_ratio": 6.0,
+        "historical_survival_rate": 0.88,
+        "subsidy_dependence_index": 0.25,
+        "veterinary_compliance": 0.80,
+        "years_in_operation": 8.0,
+        "pedigree_ratio": 0.35,
+        "previous_subsidies_count": 3.0,
+        "debt_load_ratio": 1.0,
+        "grazing_norm_deviation": 0.0,
+        "natural_loss_risk_score": 1.0,
+        "log_amount": 14.0,
+        "livestock_count": 50.0,
+        "direction_code": 0.0,
+        "is_pedigree": 0.0,
+        "is_producer": 0.0,
+        "hour_submitted": 12.0,
+        "month_submitted": 6.0,
+        "region_encoded": 7.0,
+    }
+
     def _prepare_feature_vector(self, raw: dict) -> pd.DataFrame:
         row = {}
         for feat in self.feature_names:
-            val = raw.get(feat, 0.0)                                        
-            row[feat] = float(val) if val is not None else 0.0
-
+            val = raw.get(feat)
+            if val is None:
+                # Используем медиану вместо 0.0 (0.0 = экстремальный outlier после StandardScaler)
+                row[feat] = self._FEATURE_MEDIANS.get(feat, 0.0)
+            else:
+                row[feat] = float(val)
         return pd.DataFrame([row], columns=self.feature_names)
 
     def _scale(self, X: pd.DataFrame) -> np.ndarray:

@@ -313,8 +313,16 @@ def _regex_scoring_features_from_text(text: str) -> dict[str, float]:
         return {}
     out: dict[str, float] = {}
 
+    def _in_negative_context(match_obj, window: int = 80) -> bool:
+        """Проверяет что число не в отрицательном контексте."""
+        start = max(0, match_obj.start() - window)
+        end = min(len(text), match_obj.end() + window)
+        ctx = text[start:end].lower()
+        neg_contexts = ["не ", "нет ", "отсутствует", "пример", "напр.", "образец", "сноска"]
+        return any(nc in ctx for nc in neg_contexts)
+
     m = re.search(r"долг\s*/\s*ebitda\s*[=:]\s*([0-9]+(?:[.,][0-9]+)?)", text, re.IGNORECASE)
-    if m:
+    if m and not _in_negative_context(m):
         try: out["debt_load_ratio"] = float(m.group(1).replace(",", "."))
         except ValueError: pass
     else:
@@ -414,6 +422,81 @@ def _regex_scoring_features_from_text(text: str) -> dict[str, float]:
             out["veterinary_compliance"] = pct / 100.0 if pct > 1.0 else pct
         except ValueError: pass
 
+    # ── pedigree_ratio: "Доля племенного поголовья: 75%" / "племенное поголовье 70%" ──
+    for pat in (
+        r"доля\s+племенн[\s\S]{0,40}?(\d{1,3}(?:[.,]\d+)?)\s*%",
+        r"племенн[\s\S]{0,30}поголовь[\s\S]{0,30}?(\d{1,3}(?:[.,]\d+)?)\s*%",
+        r"племенн[\s\S]{0,20}[:=]\s*(\d{1,3}(?:[.,]\d+)?)\s*%",
+    ):
+        mm = re.search(pat, text, re.IGNORECASE)
+        if mm:
+            try:
+                pct = float(mm.group(1).replace(",", "."))
+                out["pedigree_ratio"] = pct / 100.0 if pct > 1.0 else pct
+                break
+            except ValueError: pass
+
+    # ── previous_subsidies_count: "получено субсидий: 5" / "предыдущие субсидии: 3" ──
+    for pat in (
+        r"(?:полученн[ыхую]|предыдущ[иеых]|количество)\s+(?:субсиди[йяе])[\s\S]{0,30}?[:=]?\s*(\d+)",
+        r"(?:субсиди[йяе])[\s\S]{0,30}?(?:получен[оы]|ранее)[\s\S]{0,30}?(\d+)",
+        r"(\d+)\s+(?:субсиди[йяе])\s+(?:получен[оы]|ранее|предыдущ)",
+    ):
+        mm = re.search(pat, text, re.IGNORECASE)
+        if mm:
+            try:
+                cnt = int(mm.group(1))
+                if 0 <= cnt <= 50:
+                    out["previous_subsidies_count"] = float(cnt)
+                    break
+            except ValueError: pass
+
+    # ── debt_load_ratio: усиленные паттерны ──
+    if "debt_load_ratio" not in out:
+        for pat in (
+            r"долг\s*/\s*ebitda[\s\S]{0,20}?[:=]\s*([0-9]+(?:[.,][0-9]+)?)",
+            r"долговая\s+нагрузк[\s\S]{0,30}?[:=]\s*([0-9]+(?:[.,][0-9]+)?)",
+            r"(?:долг|задолженность)[\s\S]{0,20}(?:ebitda|долгов)[\s\S]{0,20}?([0-9]+(?:[.,][0-9]+)?)",
+        ):
+            mm = re.search(pat, text, re.IGNORECASE)
+            if mm:
+                try:
+                    out["debt_load_ratio"] = float(mm.group(1).replace(",", "."))
+                    break
+                except ValueError: pass
+
+    # ── subsidy_dependence_index: усиленные паттерны ──
+    if "subsidy_dependence_index" not in out:
+        for pat in (
+            r"зависимост[\s\S]{0,40}от\s+субсид[\s\S]{0,30}?[:=]\s*([0-9]+(?:[.,][0-9]+)?)\s*%",
+            r"зависимост[\s\S]{0,40}[:=]\s*([0-9]+(?:[.,][0-9]+)?)\s*%",
+            r"субсиди[йяе]\s+зависимост[\s\S]{0,30}?(\d{1,3}(?:[.,]\d+)?)\s*%",
+        ):
+            mm = re.search(pat, text, re.IGNORECASE)
+            if mm:
+                try:
+                    v = float(mm.group(1).replace(",", ".")) / 100.0
+                    if 0 <= v <= 1:
+                        out["subsidy_dependence_index"] = v
+                        break
+                except ValueError: pass
+
+    # ── years_in_operation: усиленные паттерны ──
+    if "years_in_operation" not in out:
+        for pat in (
+            r"стаж\s+работ[ыае][\s\S]{0,20}?[:=]?\s*(\d{1,3})\s*(?:лет|год|года)",
+            r"работает\s+(\d{1,3})\s*(?:лет|год|года)",
+            r"(\d{1,3})\s*(?:лет|год|года)\s+(?:работы|стажа|опыта)",
+        ):
+            mm = re.search(pat, text, re.IGNORECASE)
+            if mm:
+                try:
+                    y = float(mm.group(1))
+                    if 0 < y <= 80:
+                        out["years_in_operation"] = y
+                        break
+                except ValueError: pass
+
     return out
 
 _MODEL_FEATURES_NEEDING_IMPUTE = (
@@ -426,18 +509,23 @@ _MODEL_FEATURES_NEEDING_IMPUTE = (
     "pedigree_ratio",
     "previous_subsidies_count",
     "debt_load_ratio",
+    "grazing_norm_deviation",
+    "natural_loss_risk_score",
 )
 
 _FEATURE_IMPUTE_IF_MISSING: dict[str, float] = {
-    "gross_output_growth_yoy": 0.05,
-    "land_to_livestock_ratio": 6.0,
-    "historical_survival_rate": 0.90,
-    "subsidy_dependence_index": 0.12,
-    "veterinary_compliance": 0.88,
-    "years_in_operation": 12.0,
-    "pedigree_ratio": 0.25,
-    "previous_subsidies_count": 0.0,
-    "debt_load_ratio": 0.6,
+    # Нейтральные дефолты: нет данных = среднее по рынку (не наказываем и не поощряем)
+    "gross_output_growth_yoy": 0.03,      # небольшой рост (было -0.05 спад)
+    "land_to_livestock_ratio": 6.0,       # средняя земля
+    "historical_survival_rate": 0.88,     # 88% выживаемость (было 0.75)
+    "subsidy_dependence_index": 0.25,     # умеренная зависимость (было 0.50)
+    "veterinary_compliance": 0.70,        # 70% соответствие (было 0.50)
+    "years_in_operation": 8.0,            # средний опыт (было 3.0)
+    "pedigree_ratio": 0.30,               # умеренное племенное (было 0.15)
+    "previous_subsidies_count": 2.0,      # немного истории (было 0.0)
+    "debt_load_ratio": 1.2,               # умеренный долг (было 2.5)
+    "grazing_norm_deviation": 0.1,        # небольшое отклонение (было 0.5)
+    "natural_loss_risk_score": 1.1,       # чуть выше нормы (было 1.5)
 }
 
 

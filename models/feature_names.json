@@ -8,6 +8,8 @@
   "pedigree_ratio",
   "previous_subsidies_count",
   "debt_load_ratio",
+  "grazing_norm_deviation",
+  "natural_loss_risk_score",
   "log_amount",
   "livestock_count",
   "direction_code",

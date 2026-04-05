@@ -22,9 +22,9 @@ from xgboost import XGBRegressor
 warnings.filterwarnings("ignore")                                          
 
 RANDOM_SEED  = 42
-INPUT_FILE   = "data_features.csv"                                  
-MODELS_DIR   = Path("models")                                            
-REPORTS_DIR  = Path("reports")                                
+INPUT_FILE   = str(Path(__file__).parent.parent / "data" / "data_features.csv")
+MODELS_DIR   = Path(__file__).parent.parent / "models"
+REPORTS_DIR  = Path(__file__).parent.parent / "reports"
 
 MODELS_DIR.mkdir(exist_ok=True)
 REPORTS_DIR.mkdir(exist_ok=True)
@@ -39,6 +39,8 @@ ML_FEATURES = [
     "pedigree_ratio",
     "previous_subsidies_count",
     "debt_load_ratio",
+    "grazing_norm_deviation",
+    "natural_loss_risk_score",
     "log_amount",
     "livestock_count",
     "direction_code",

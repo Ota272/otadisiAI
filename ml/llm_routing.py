@@ -80,6 +80,14 @@ def openai_compatible_chat(
     return text
 
 
+def _groq_truncate(text: str, max_chars: int) -> str:
+    """Сокращает текст, сохраняя начало и конец."""
+    if len(text) <= max_chars:
+        return text
+    third = max_chars // 3
+    return text[:third] + "\n\n[... сокращено для Groq лимита ...]\n\n" + text[-third:]
+
+
 def groq_chat(
     *,
     system_prompt: str,
@@ -88,19 +96,39 @@ def groq_chat(
     max_tokens: int = 8192,
     temperature: float = 0.2,
 ) -> str:
+    from openai import OpenAI
+    
     gkey = _s("GROQ_API_KEY")
     if not gkey:
         raise RuntimeError("GROQ_API_KEY не задан")
     m = (model or _s("GROQ_CHAT_MODEL") or _s("GROQ_EXPERT_MODEL") or "llama-3.1-8b-instant").strip()
-    return openai_compatible_chat(
-        api_key=gkey,
-        base_url="https://api.groq.com/openai/v1",
+    
+    # Groq лимит: 6000 TPM. Оставляем ~2000 на ответ.
+    # 1 токен ≈ 2.5 символа → макс вход ~3500 токенов ≈ 8750 символов
+    GROQ_MAX_CHARS = 8000
+    total_chars = len(system_prompt) + len(user_message)
+    
+    if total_chars > GROQ_MAX_CHARS:
+        target_each = GROQ_MAX_CHARS // 2 - 500
+        system_prompt = _groq_truncate(system_prompt, target_each)
+        user_message = _groq_truncate(user_message, target_each)
+        final_chars = len(system_prompt) + len(user_message)
+        print(f"[groq_chat] Сокращено: {total_chars} → {final_chars} символов")
+    
+    client = OpenAI(api_key=gkey, base_url="https://api.groq.com/openai/v1")
+    resp = client.chat.completions.create(
         model=m,
-        system_prompt=system_prompt,
-        user_message=user_message,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
         temperature=temperature,
         max_tokens=max_tokens,
     )
+    text = (resp.choices[0].message.content or "").strip()
+    if not text:
+        raise RuntimeError("Пустой ответ модели")
+    return text
 
 
 def groq_vision_ocr_page(*, png_bytes: bytes, prompt: str, model: Optional[str] = None) -> str:

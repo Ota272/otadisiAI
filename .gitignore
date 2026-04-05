@@ -18,3 +18,8 @@ Thumbs.db
 data/*.sqlite
 data/*.sqlite-journal
 .qwen/
+ml/*.joblib
+notebooks/
+reports/
+translate_dataset.py
+*.pdf

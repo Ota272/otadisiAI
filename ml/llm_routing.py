@@ -1,4 +1,4 @@
-"""Маршрутизация облачных LLM: Groq (бесплатный tier) и Gemini."""
+"""Маршрутизация облачных LLM: Groq, Gemini, OpenAI-совместимые (OpenRouter и др.)."""
 
 from __future__ import annotations
 
@@ -13,33 +13,73 @@ def _s(name: str) -> str:
 def primary_cloud_llm() -> str:
     """
     Документы: JSON-фичи, compliance-LLM, резервный OCR.
-    LLM_PROVIDER=groq|gemini|none — явно.
-    Иначе: Groq при GROQ_API_KEY, иначе Gemini при GEMINI_API_KEY, иначе none.
+    LLM_PROVIDER=openai|groq|gemini|none — явно.
+    Иначе: OpenAI-совместимый (OpenRouter) → Gemini → Groq → none.
     """
     p = _s("LLM_PROVIDER").lower()
+    if p == "openai" and _s("OPENAI_API_KEY"):
+        return "openai"
     if p in ("groq", "gemini", "none"):
         return p
-    if _s("GROQ_API_KEY"):
-        return "groq"
+    if _s("OPENAI_API_KEY"):
+        return "openai"
     if _s("GEMINI_API_KEY"):
         return "gemini"
+    if _s("GROQ_API_KEY"):
+        return "groq"
     return "none"
+
+
+def openai_doc_model() -> str:
+    return (
+        _s("OPENAI_DOC_MODEL")
+        or _s("OPENAI_EXPERT_MODEL")
+        or "openai/gpt-oss-120b:free"
+    ).strip()
+
+
+def openai_doc_chat(
+    *,
+    system_prompt: str,
+    user_message: str,
+    temperature: float = 0.15,
+    max_tokens: int = 8192,
+) -> str:
+    """Извлечение JSON-фич из PDF через OpenRouter / OpenAI / DeepSeek и т.д."""
+    okey = _s("OPENAI_API_KEY")
+    if not okey:
+        raise RuntimeError("OPENAI_API_KEY не задан")
+    base = _s("OPENAI_API_BASE").strip() or None
+    return openai_compatible_chat(
+        api_key=okey,
+        base_url=base or "https://api.openai.com/v1",
+        model=openai_doc_model(),
+        system_prompt=system_prompt,
+        user_message=user_message,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
 
 
 def expert_opinion_provider() -> str:
     """
-    Текст экспертного заключения.
-    EXPERT_OPINION_PROVIDER переопределяет; иначе как primary_cloud_llm().
-    Если ключей нет — 'gemini' (совместимость; generate_* проверит available).
+    Экспертное заключение. EXPERT_OPINION_PROVIDER имеет приоритет
+    (OpenAI-совместимые API: OpenAI, DeepSeek, NVIDIA NIM, OpenRouter).
+    Иначе Gemini при GEMINI_API_KEY; Groq — только без Gemini и с коротким промптом.
     """
     p = _s("EXPERT_OPINION_PROVIDER").lower()
-    if p in ("groq", "openai", "gpt", "chatgpt"):
-        return p
-    if p == "gemini":
+    if p in ("openai", "gpt", "chatgpt") and _s("OPENAI_API_KEY"):
+        return "openai"
+    if p == "groq" and _s("GROQ_API_KEY"):
+        return "groq"
+    if p == "gemini" and _s("GEMINI_API_KEY"):
         return "gemini"
-    c = primary_cloud_llm()
-    if c in ("groq", "gemini"):
-        return c
+    if _s("GEMINI_API_KEY"):
+        return "gemini"
+    if _s("OPENAI_API_KEY"):
+        return "openai"
+    if _s("GROQ_API_KEY"):
+        return "groq"
     return "gemini"
 
 

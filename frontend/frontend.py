@@ -957,10 +957,17 @@ with tab1:
                 uploaded_docs = []
             else:
                 st.success(T("form_filesize_ok").format(count=len(uploaded_docs), mb=total_mb))
-                with st.expander(T("form_file_list"), expanded=False):
-                    for d in uploaded_docs:
-                        sz_kb = len(d.getvalue()) / 1024
-                        st.caption(f"📄 {d.name} — {sz_kb:.1f} КБ")
+                file_lines = []
+                for d in uploaded_docs:
+                    sz_kb = len(d.getvalue()) / 1024
+                    file_lines.append(f"<li>📄 {d.name} — {sz_kb:.1f} КБ</li>")
+                st.markdown(
+                    f"<details style='margin-top:8px;'>"
+                    f"<summary style='cursor:pointer; font-weight:600;'>{T('form_file_list')}</summary>"
+                    f"<ul style='margin:8px 0 0; padding-left:20px; font-size:13px; color:#555;'>"
+                    f"{''.join(file_lines)}</ul></details>",
+                    unsafe_allow_html=True,
+                )
 
         if st.button(T("form_btn_submit"), type="primary", use_container_width=True):
             if not man_bin.strip() or not man_company.strip():
@@ -1461,6 +1468,17 @@ with tab3:
                 st.caption(T("profile_indicators_caption"))
                 if pdf_ok:
                     st.caption(T("profile_indicators_pdf_caption"))
+                _imputed = set(app.get("imputed_features") or [])
+                _feat_src = app.get("feature_sources") or {}
+                if _imputed:
+                    st.caption(
+                        "Серые N/A: показатель не найден в анкете/PDF; в модели подставлено среднее "
+                        "(не путать с фактом из документов)."
+                    )
+                if _feat_src:
+                    st.caption(
+                        "Источники признаков: анкета · PDF (текст) · PDF (LLM) · подстановка для модели."
+                    )
 
                 import math as _math
                 prof = _normalized_profile_from_raw(raw_features)
@@ -1619,12 +1637,28 @@ with tab3:
                             if src:
                                 explanation = src.get("explanation", "")
                                 raw_hint = src.get("raw_value", raw_for_shap.get(fname))
+                                _src_lbl = {
+                                    "form": "анкета",
+                                    "pdf_regex": "PDF (текст)",
+                                    "pdf_llm": "PDF (LLM)",
+                                    "pdf": "PDF",
+                                    "imputed": "подстановка",
+                                }.get(src.get("source") or _feat_src.get(fname), "")
+                                if src.get("imputed") or fname in _imputed:
+                                    raw_hint = "N/A (подстановка для модели)"
+                                elif _src_lbl:
+                                    raw_hint = f"{raw_hint} · {_src_lbl}" if raw_hint not in (None, "—") else _src_lbl
                             else:
                                 explanation = (
                                     f"Значение признака в модели: {raw_for_shap.get(fname, '—')}. "
                                     f"Вклад в итоговый балл (SHAP): {shap_val:+.3f} в шкале модели."
                                 )
                                 raw_hint = raw_for_shap.get(fname)
+                                _src_lbl = _feat_src.get(fname, "")
+                                if fname in _imputed:
+                                    raw_hint = "N/A (подстановка для модели)"
+                                elif _src_lbl:
+                                    raw_hint = f"{raw_hint} · {_src_lbl}" if raw_hint not in (None, "—") else _src_lbl
                             shap_html += f"""
                             <div class="shap-item {cls}">
                                 <span class="shap-val">{sign}{pts} б.</span>

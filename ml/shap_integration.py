@@ -148,6 +148,8 @@ class ScoringEngine:
         *,
         lang: str = "ru",
         include_shap: bool = True,
+        imputed_fields: Optional[list[str]] = None,
+        feature_sources: Optional[dict[str, str]] = None,
     ) -> dict:
 
         X = self._prepare_feature_vector(raw_features)
@@ -157,11 +159,19 @@ class ScoringEngine:
         raw_score = float(self.model.predict(X_scaled)[0])
         score = round(float(np.clip(raw_score, 1.0, 100.0)), 1)
 
+        imputed_set = set(imputed_fields or [])
+        sources_map = feature_sources or {}
+
         if include_shap:
             shap_values = self._compute_shap(X_scaled)
             shap_base = self._get_shap_base_value(X_scaled)
             top_positive, top_negative = self._build_explanations(
-                shap_values, raw_features, lang=lang, n_factors=3
+                shap_values,
+                raw_features,
+                lang=lang,
+                n_factors=3,
+                imputed_fields=imputed_set,
+                feature_sources=sources_map,
             )
             all_shap_values = {
                 name: round(float(val), 3)
@@ -261,7 +271,28 @@ class ScoringEngine:
         raw_features: dict,
         lang: str = "ru",
         n_factors: int = 3,
+        imputed_fields: Optional[set] = None,
+        feature_sources: Optional[dict[str, str]] = None,
     ) -> tuple[list[dict], list[dict]]:
+        imputed_fields = imputed_fields or set()
+        feature_sources = feature_sources or {}
+        source_suffix = {
+            "ru": {
+                "form": " — из анкеты",
+                "pdf_regex": " — из текста PDF (распознавание)",
+                "pdf_llm": " — из PDF (LLM)",
+                "pdf": " — из PDF",
+                "imputed": " — нет в PDF/анкете, подставлено среднее для модели",
+            },
+            "kz": {
+                "form": " — анкетадан",
+                "pdf_regex": " — PDF мәтінінен",
+                "pdf_llm": " — PDF (LLM)",
+                "pdf": " — PDF-тен",
+                "imputed": " — PDF/анкетада жоқ, модель үшін орташа мән",
+            },
+        }
+        suf = source_suffix.get(lang, source_suffix["ru"])
         factors = []
         for i, (name, shap_val) in enumerate(zip(self.feature_names, shap_values)):
             raw_val = raw_features.get(name, 0.0)
@@ -270,12 +301,20 @@ class ScoringEngine:
             label = FEATURE_LABELS[lang].get(name, name)
 
             explanation_text = self._explain_feature(name, raw_val, float(shap_val), lang=lang)
+            src = feature_sources.get(name) or ("imputed" if name in imputed_fields else "model")
+            explanation_text += suf.get(src, suf.get("imputed", ""))
+            if name in imputed_fields:
+                raw_display = None
+            else:
+                raw_display = round(float(raw_val), 4) if isinstance(raw_val, (int, float)) else raw_val
 
             factors.append({
                 "feature": name,
                 "label": label,
                 "shap_value": round(float(shap_val), 2),
-                "raw_value": round(float(raw_val), 4) if isinstance(raw_val, (int, float)) else raw_val,
+                "raw_value": raw_display,
+                "imputed": name in imputed_fields,
+                "source": src,
                 "direction": "positive" if shap_val > 0 else "negative",
                 "explanation": explanation_text,
                 "impact_text": f"{'+'if shap_val>0 else ''}{shap_val:.1f} балл: {explanation_text}",
@@ -315,7 +354,22 @@ class ScoringEngine:
                 "livestock_neg": lambda v: f"Небольшое хозяйство ({v:.0f} голов)",
                 "pedigree_dir": "Субсидия на племенное поголовье — стратегическое направление",
                 "pedigree_dir_no": "Субсидия на товарное производство",
-                "default": lambda lbl, d: f"Показатель '{lbl}' влияет {d} на оценку",
+                "grazing_pos": lambda v: f"Нагрузка на пастбища в норме (отклонение {v:+.2f} от норматива)",
+                "grazing_neg": lambda v: f"Превышение/дефицит нормы выпаса (отклонение {v:+.2f})",
+                "risk_pos": lambda v: f"Умеренный риск естественной убыли (индекс {v:.2f})",
+                "risk_neg": lambda v: f"Повышенный риск падежа относительно нормы (индекс {v:.2f})",
+                "log_amt_pos": lambda v: f"Крупный запрашиваемый объём субсидии (log-сумма {v:.1f})",
+                "log_amt_neg": lambda v: f"Небольшой запрашиваемый объём (log-сумма {v:.1f})",
+                "dir_pedigree": "Направление субсидии — племенное животноводство",
+                "dir_other": "Направление субсидии — неплеменное/иное",
+                "producer_yes": "Заявка от производителя продукции",
+                "producer_no": "Не отмечен как производитель",
+                "region": lambda v: f"Регион закодирован для модели (код {v:.0f})",
+                "season": lambda v: f"Месяц подачи заявки: {int(v)}",
+                "hour": lambda v: f"Час подачи заявки: {int(v)}",
+                "lang_ru": "Заявка на русском языке",
+                "lang_kz": "Заявка на казахском языке",
+                "default": lambda lbl, d: f"Показатель «{lbl}» влияет {d} на балл модели",
             },
             "kz": {
                 "gross_pos": lambda v: f"Жалпы өнімнің өсуі {v:+.1f}% ж/ж — оң динамика",
@@ -340,7 +394,22 @@ class ScoringEngine:
                 "livestock_neg": lambda v: f"Кіші шаруашылық ({v:.0f} бас)",
                 "pedigree_dir": "Тұқымдық малға субсидия — стратегиялық бағыт",
                 "pedigree_dir_no": "Тауарлық өндіріске субсидия",
-                "default": lambda lbl, d: f"'{lbl}' көрсеткіші {d} әсер етеді",
+                "grazing_pos": lambda v: f"Жайылым жүктемесі нормада (ауытқу {v:+.2f})",
+                "grazing_neg": lambda v: f"Жайылым нормасынан ауытқу ({v:+.2f})",
+                "risk_pos": lambda v: f"Табиғи құрау тәуекелі орташа (индекс {v:.2f})",
+                "risk_neg": lambda v: f"Құрау тәуекелі жоғары (индекс {v:.2f})",
+                "log_amt_pos": lambda v: f"Ірі субсидия сомасы (log {v:.1f})",
+                "log_amt_neg": lambda v: f"Кіші субсидия сомасы (log {v:.1f})",
+                "dir_pedigree": "Субсидия бағыты — тұқымдық мал",
+                "dir_other": "Субсидия бағыты — басқа",
+                "producer_yes": "Өндіруші ретінде көрсетілген",
+                "producer_no": "Өндіруші емес",
+                "region": lambda v: f"Аймақ коды ({v:.0f})",
+                "season": lambda v: f"Өтінім айы: {int(v)}",
+                "hour": lambda v: f"Өтінім сағаты: {int(v)}",
+                "lang_ru": "Өтінім орыс тілінде",
+                "lang_kz": "Өтінім қазақ тілінде",
+                "default": lambda lbl, d: f"«{lbl}» көрсеткіші {d} әсер етеді",
             },
         }
         t = TEXT[lang]
@@ -372,6 +441,24 @@ class ScoringEngine:
             return t["livestock_pos"](value) if positive else t["livestock_neg"](value)
         elif name == "is_pedigree":
             return t["pedigree_dir"] if value == 1 else t["pedigree_dir_no"]
+        elif name == "is_producer":
+            return t["producer_yes"] if value == 1 else t["producer_no"]
+        elif name == "grazing_norm_deviation":
+            return t["grazing_pos"](value) if positive else t["grazing_neg"](value)
+        elif name == "natural_loss_risk_score":
+            return t["risk_pos"](value) if positive else t["risk_neg"](value)
+        elif name == "log_amount":
+            return t["log_amt_pos"](value) if positive else t["log_amt_neg"](value)
+        elif name == "direction_code":
+            return t["dir_pedigree"] if value <= 2 else t["dir_other"]
+        elif name == "region_encoded":
+            return t["region"](value)
+        elif name == "month_submitted":
+            return t["season"](value)
+        elif name == "hour_submitted":
+            return t["hour"](value)
+        elif name == "language_code":
+            return t["lang_kz"] if value >= 0.5 else t["lang_ru"]
         else:
             lbl = FEATURE_LABELS[lang].get(name, name)
             direction = "оң" if positive else "теріс" if lang == "kz" else "положительно" if positive else "отрицательно"
@@ -454,7 +541,12 @@ def _strip_markdown_json_fence(s: str) -> str:
 def _doc_feature_system_prompt() -> str:
     return """Ты — аналитик Министерства сельского хозяйства РК.
 Твоя задача: извлечь структурированные факты из документов сельхозпредприятия
-для системы скоринга субсидий. Числа для ML должны совпадать по смыслу с полями модели.
+для системы скоринга субсидий. Текст может быть на русском и/или казахском (двуязычные PDF).
+
+Ищи явные подписи (примеры): «Ветсоответствие» / «Ветсәйкестік», «Племдоля» / «Плем үлесі»,
+«Сохранность» / «Сақталуы», «Рост валовой продукции г/г» / «Жалпы өнім өсуі ж/ж»,
+«Долг/EBITDA» / «Қарыз/EBITDA», «Стаж, лет», «Зависимость от субсидий»,
+«Ранее субсидий», «Отклонение нагрузки», «Риск vs норма падежа», «Обеспеченность, га/гол».
 
 КРИТИЧНО для полей years_in_operation, subsidy_dependence_index, gross_output_growth_yoy:
 в JSON возвращай ТОЛЬКО числа (integer или float), БЕЗ единиц измерения и без текста.
@@ -600,27 +692,48 @@ def extract_features_from_documents_groq(documents_text: str) -> dict:
         }
 
 
+def extract_features_from_documents_openai(documents_text: str) -> dict:
+    from ml.llm_routing import openai_doc_chat
+
+    system_prompt = _doc_feature_system_prompt()
+    user_message = _doc_feature_user_message(documents_text)
+    try:
+        raw = openai_doc_chat(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            temperature=0.15,
+            max_tokens=8192,
+        )
+        return _parse_doc_features_llm_response(raw, "OpenAI/OpenRouter")
+    except Exception as e:
+        return {
+            "features": {},
+            "llm_summary": None,
+            "extraction_status": f"api_error: {e}",
+        }
+
+
 def extract_features_from_documents_auto(documents_text: str) -> dict:
-    """Groq или Gemini по LLM_PROVIDER / ключам (см. ml/llm_routing.py)."""
+    """OpenAI-совместимый (OpenRouter), Groq или Gemini по LLM_PROVIDER / ключам."""
     from ml.llm_routing import primary_cloud_llm
 
     backend = primary_cloud_llm()
     gq = (os.getenv("GROQ_API_KEY") or "").strip()
     gm = (os.getenv("GEMINI_API_KEY") or "").strip()
+    oa = (os.getenv("OPENAI_API_KEY") or "").strip()
+
+    if backend == "openai" and oa:
+        return extract_features_from_documents_openai(documents_text)
     if backend == "groq" and gq:
         return extract_features_from_documents_groq(documents_text)
     if backend == "gemini" and gm:
         return extract_features_from_documents(documents_text, gm)
-    if backend == "none":
-        return {
-            "features": {},
-            "llm_summary": None,
-            "extraction_status": "no_cloud_llm",
-        }
-    if gq:
-        return extract_features_from_documents_groq(documents_text)
+    if oa:
+        return extract_features_from_documents_openai(documents_text)
     if gm:
         return extract_features_from_documents(documents_text, gm)
+    if gq:
+        return extract_features_from_documents_groq(documents_text)
     return {
         "features": {},
         "llm_summary": None,
@@ -1039,25 +1152,27 @@ COMPLIANCE (чеклист по тексту PDF):
 Если выше есть текст PDF — обязательно включи в аргументы отсылки к фактам из этого текста (что именно видно в документах)."""
 
     provider = expert_opinion_provider()
-    if provider == "groq":
-        try:
-            return _expert_opinion_via_groq(system_prompt, user_message)
-        except Exception as e:
-            return f"Экспертное заключение (Groq) недоступно: {e}"
+
     if provider in ("openai", "gpt", "chatgpt"):
         try:
             return _expert_opinion_via_openai(system_prompt, user_message)
         except Exception as e:
             return f"Экспертное заключение (OpenAI) недоступно: {e}"
 
-    import google.generativeai as genai
+    if provider == "groq":
+        try:
+            return _expert_opinion_via_groq(system_prompt, user_message)
+        except Exception as e:
+            return f"Экспертное заключение (Groq) недоступно: {e}"
 
     gkey = (api_key or os.getenv("GEMINI_API_KEY") or "").strip()
     if not gkey:
         return (
-            "Экспертное заключение (Gemini) недоступно: GEMINI_API_KEY не задан. "
-            "Для бесплатного варианта задайте GROQ_API_KEY и при необходимости EXPERT_OPINION_PROVIDER=groq."
+            "Экспертное заключение (Gemini) недоступно: задайте GEMINI_API_KEY в .env "
+            "(корень проекта или frontend/.env) и перезапустите Streamlit."
         )
+
+    import google.generativeai as genai
     genai.configure(api_key=gkey)
 
     model_name = (os.getenv("GEMINI_EXPERT_MODEL") or "gemini-2.0-flash").strip()
@@ -1077,47 +1192,10 @@ COMPLIANCE (чеклист по тексту PDF):
                 continue
             break
 
-    if last_exc is not None and _is_gemini_quota_error(last_exc):
-        if os.getenv("GROQ_API_KEY", "").strip():
-            try:
-                alt = _expert_opinion_via_groq(system_prompt, user_message)
-                return (
-                    alt
-                    + "\n\n────────────────────────────────────\n"
-                    + "Примечание: заключение через бесплатный резерв Groq (квота Gemini исчерпана). "
-                    + "Ключ: https://console.groq.com/keys — переменные GROQ_API_KEY, опционально GROQ_EXPERT_MODEL."
-                )
-            except Exception as e_g:
-                groq_err = e_g
-        else:
-            groq_err = None
-
-        if os.getenv("OPENAI_API_KEY", "").strip():
-            try:
-                alt = _expert_opinion_via_openai(system_prompt, user_message)
-                return (
-                    alt
-                    + "\n\n────────────────────────────────────\n"
-                    + "Примечание: резерв OpenAI (Gemini недоступен). Для бесплатного варианта используйте GROQ_API_KEY."
-                )
-            except Exception as e2:
-                parts = [f"Экспертное заключение Gemini недоступно: {last_exc}"]
-                if groq_err is not None:
-                    parts.append(f"Резерв Groq: {groq_err}")
-                parts.append(f"Резерв OpenAI: {e2}")
-                return "\n".join(parts)
-
-        if groq_err is not None:
-            return (
-                f"Экспертное заключение Gemini недоступно: {last_exc}\n"
-                f"Резерв Groq не сработал: {groq_err}\n"
-                "Проверьте ключ и модель (GROQ_EXPERT_MODEL, например llama-3.1-8b-instant) на https://console.groq.com/"
-            )
-
     _tail = f"Экспертное заключение Gemini недоступно: {last_exc}"
     if last_exc is not None and _is_gemini_quota_error(last_exc):
         _tail += (
-            "\n\nБесплатный обход квоты Gemini: ключ Groq без оплаты — https://console.groq.com/keys → "
-            "добавьте в .env GROQ_API_KEY (или EXPERT_OPINION_PROVIDER=groq для только Groq)."
+            "\n\nКвота Gemini исчерпана (429). Подождите или укажите другой GEMINI_API_KEY. "
+            "Резерв Groq для экспертного заключения отключён: полный промпт не помещается в лимит TPM."
         )
     return _tail

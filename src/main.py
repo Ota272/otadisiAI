@@ -275,12 +275,34 @@ def _coerce_doc_scalar(val, key: str) -> float | None:
     return None
 
 
+_SOURCE_TAG_LABEL = {
+    "REGEX_PRE": "pdf_regex",
+    "REGEX_POST": "pdf_regex",
+    "LLM_DOC": "pdf_llm",
+    "DOC": "pdf",
+}
+
+
+def _snapshot_form_feature_sources(feature_dict: dict) -> dict[str, str]:
+    sources: dict[str, str] = {}
+    for key in _MODEL_FEATURES_NEEDING_IMPUTE:
+        if feature_dict.get(key) is not None:
+            sources[key] = "form"
+    return sources
+
+
+def _apply_imputed_sources(sources: dict[str, str], imputed: list[str]) -> None:
+    for key in imputed:
+        sources[key] = "imputed"
+
+
 def _merge_extracted_doc_features(
     feature_dict: dict,
     doc_features: dict,
     *,
     source_tag: str = "DOC",
     force: bool = False,          # REGEX_POST passes force=True to override any prior value
+    feature_sources: dict[str, str] | None = None,
 ) -> None:
     if not doc_features:
         return
@@ -306,6 +328,8 @@ def _merge_extracted_doc_features(
         if not force and old_f is not None and abs(old_f - new_f) <= 1e-9:
             continue
         feature_dict[key] = new_f
+        if feature_sources is not None:
+            feature_sources[key] = _SOURCE_TAG_LABEL.get(source_tag, "pdf")
         print(f"[FEATURE_UPDATE] {key}: {old_f} → {new_f}  (source={source_tag})")
 
     lah_raw = doc_features.get("land_area_ha")
@@ -339,6 +363,96 @@ def _regex_scoring_features_from_text(text: str) -> dict[str, float]:
     if not text or len(text) < 30:
         return {}
     out: dict[str, float] = {}
+
+    def _pct_field(label_pat: str, key: str) -> None:
+        if key in out:
+            return
+        m = re.search(
+            rf"{label_pat}\s*[:=]?\s*(\d{{1,3}}(?:[.,]\d+)?)\s*%",
+            text,
+            re.IGNORECASE,
+        )
+        if m:
+            try:
+                pct = float(m.group(1).replace(",", "."))
+                out[key] = pct / 100.0 if pct > 1.0 else pct
+            except ValueError:
+                pass
+
+    # Демо-PDF и двуязычные подписи (main_2.py)
+    _pct_field(r"(?:ветсоответствие|ветсәйкестік|ветеринарн\w*\s+соответств)", "veterinary_compliance")
+    _pct_field(r"(?:племдоля|плем\s*үлесі|доля\s+племенн)", "pedigree_ratio")
+    _pct_field(r"(?:сохранност\w*|сақталу\w*)", "historical_survival_rate")
+    _pct_field(r"(?:рост\s+вп|жө\s*өсуі)", "gross_output_growth_yoy")
+    if "gross_output_growth_yoy" not in out:
+        m = re.search(
+            r"рост\s+валовой\s+продукц[\s\S]{0,30}?г/г[\s\S]{0,15}?([+-]?\d+(?:[.,]\d+)?)\s*%",
+            text,
+            re.IGNORECASE,
+        )
+        if m:
+            try:
+                out["gross_output_growth_yoy"] = float(m.group(1).replace(",", ".")) / 100.0
+            except ValueError:
+                pass
+    _pct_field(r"(?:зависимост\w*\s+от\s+субсид|субсидияға\s+тәуелділік)", "subsidy_dependence_index")
+
+    m = re.search(
+        r"(?:стаж,?\s*лет|тәжірибе,?\s*жыл|стаж)\s*[:=]?\s*(\d{1,3})",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        try:
+            y = float(m.group(1))
+            if 0 < y <= 80:
+                out["years_in_operation"] = y
+        except ValueError:
+            pass
+
+    m = re.search(
+        r"(?:ранее\s+субсид|бұрынғы\s+субсидиялар)\s*[:=]?\s*(\d+)",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        try:
+            out["previous_subsidies_count"] = float(int(m.group(1)))
+        except ValueError:
+            pass
+
+    m = re.search(
+        r"(?:отклонение\s+нагрузки|жүктеме\s+ауытқуы)\s*[:=]?\s*([+-]?\d+(?:[.,]\d+)?)",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        try:
+            out["grazing_norm_deviation"] = float(m.group(1).replace(",", "."))
+        except ValueError:
+            pass
+
+    m = re.search(
+        r"(?:риск\s+vs\s+норма\s+падежа|құрау\s+нормасына\s+қатысты\s+тәуекел)\s*[:=]?\s*(\d+(?:[.,]\d+)?)",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        try:
+            out["natural_loss_risk_score"] = float(m.group(1).replace(",", "."))
+        except ValueError:
+            pass
+
+    m = re.search(
+        r"(?:қарыз/ebitda|долг/ebitda)\s*[=:]\s*([0-9]+(?:[.,][0-9]+)?)",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        try:
+            out["debt_load_ratio"] = float(m.group(1).replace(",", "."))
+        except ValueError:
+            pass
 
     def _in_negative_context(match_obj, window: int = 80) -> bool:
         """Проверяет что число не в отрицательном контексте."""
@@ -448,6 +562,12 @@ def _regex_scoring_features_from_text(text: str) -> dict[str, float]:
             pct = float(m.group(1).replace(",", "."))
             out["veterinary_compliance"] = pct / 100.0 if pct > 1.0 else pct
         except ValueError: pass
+    elif re.search(
+        r"ветеринарн\w*\s+паспорт|ветпаспорт|veterinary\s+passport",
+        text,
+        re.IGNORECASE,
+    ):
+        out["has_vet_passport"] = 1.0
 
     # ── pedigree_ratio: "Доля племенного поголовья: 75%" / "племенное поголовье 70%" ──
     for pat in (
@@ -556,7 +676,20 @@ _FEATURE_IMPUTE_IF_MISSING: dict[str, float] = {
 }
 
 
-def _impute_missing_model_features(feature_dict: dict, *, tag: str = "IMPUTE") -> None:
+def _derive_context_features(feature_dict: dict) -> None:
+    """Заполнить признаки из флагов заявки до нейтральных дефолтов."""
+    if feature_dict.get("pedigree_ratio") is None:
+        if feature_dict.get("is_pedigree") == 1.0:
+            feature_dict["pedigree_ratio"] = 0.55
+            print("[DERIVE] pedigree_ratio=0.55 (направление/субсидия племенные)")
+    if feature_dict.get("veterinary_compliance") is None:
+        if feature_dict.get("has_vet_passport") == 1.0:
+            feature_dict["veterinary_compliance"] = 0.88
+            print("[DERIVE] veterinary_compliance=0.88 (ветпаспорт в документах)")
+
+
+def _impute_missing_model_features(feature_dict: dict, *, tag: str = "IMPUTE") -> list[str]:
+    imputed: list[str] = []
     for key in _MODEL_FEATURES_NEEDING_IMPUTE:
         if key not in feature_dict:
             continue
@@ -567,7 +700,36 @@ def _impute_missing_model_features(feature_dict: dict, *, tag: str = "IMPUTE") -
         if default is None:
             continue
         feature_dict[key] = default
+        imputed.append(key)
         print(f"WARNING: Field {key} is missing, using default {default} ({tag})")
+    return imputed
+
+
+def _raw_features_for_display(
+    feature_dict: dict,
+    imputed: list[str],
+    *,
+    model_feature_names: list[str] | None = None,
+) -> dict:
+    """Для UI/SHAP-подписей: подставленные дефолты не показываем как «факт из PDF»."""
+    imputed_set = set(imputed)
+    keys = model_feature_names or list(_MODEL_FEATURES_NEEDING_IMPUTE) + [
+        "log_amount", "livestock_count", "direction_code", "is_pedigree", "is_producer",
+        "hour_submitted", "month_submitted", "region_encoded", "language_code",
+    ]
+    out: dict = {}
+    for key in keys:
+        if key in imputed_set:
+            out[key] = None
+            continue
+        val = feature_dict.get(key)
+        if val is None:
+            out[key] = None
+        elif isinstance(val, (int, float)):
+            out[key] = round(float(val), 4)
+        else:
+            out[key] = val
+    return out
 
 
 def _build_feature_dict(f: FarmerFeatures) -> dict:
@@ -658,8 +820,19 @@ def _build_score_response(
     include_shap: bool = True,
 ) -> dict:
     feature_dict = _build_feature_dict(features)
-    _impute_missing_model_features(feature_dict, tag="IMPUTE_FORM")
-    result = engine.score_farmer(feature_dict, include_shap=include_shap)
+    feature_sources = _snapshot_form_feature_sources(feature_dict)
+    _derive_context_features(feature_dict)
+    imputed = _impute_missing_model_features(feature_dict, tag="IMPUTE_FORM")
+    _apply_imputed_sources(feature_sources, imputed)
+    result = engine.score_farmer(
+        feature_dict,
+        include_shap=include_shap,
+        imputed_fields=imputed,
+        feature_sources=feature_sources,
+    )
+    display_features = _raw_features_for_display(
+        feature_dict, imputed, model_feature_names=engine.feature_names
+    )
 
     app_id = str(uuid.uuid4())[:8].upper()
     app_date = features.application_date or datetime.now().strftime("%Y-%m-%d")
@@ -688,7 +861,9 @@ def _build_score_response(
         "top_negative_factors":  result["top_negative_factors"],
         "all_shap_values":       result["all_shap_values"],
         "shap_base_value":       result.get("shap_base_value"),
-        "raw_features_used":     result.get("raw_features_used", {}),
+        "raw_features_used":     display_features,
+        "imputed_features":      imputed,
+        "feature_sources":       feature_sources,
         "compliance":            None,
         "documents_text_chars":  0,
         "documents_extracted_ok": False,
@@ -876,6 +1051,7 @@ async def score_with_documents(
         raise HTTPException(status_code=422, detail=f"Ошибка парсинга данных: {e}")
 
     feature_dict = _build_feature_dict(features)
+    feature_sources = _snapshot_form_feature_sources(feature_dict)
     llm_summary = None
     combined_text     = ""                                       
     combined_text_llm = ""                                               
@@ -955,14 +1131,18 @@ async def score_with_documents(
 
             rx_pre = _regex_scoring_features_from_text(combined_text_llm)
             if rx_pre:
-                _merge_extracted_doc_features(feature_dict, rx_pre, source_tag="REGEX_PRE")
+                _merge_extracted_doc_features(
+                    feature_dict, rx_pre, source_tag="REGEX_PRE", feature_sources=feature_sources
+                )
                 print(f"[docs] regex (до LLM): {rx_pre}")
 
             extraction = extract_features_from_documents_auto(combined_text_llm)
             llm_summary = extraction.get("llm_summary")
             doc_features = extraction.get("features") or {}
             if doc_features:
-                _merge_extracted_doc_features(feature_dict, doc_features, source_tag="LLM_DOC")
+                _merge_extracted_doc_features(
+                    feature_dict, doc_features, source_tag="LLM_DOC", feature_sources=feature_sources
+                )
             if extraction.get("extraction_status") != "success":
                 print(
                     f"[docs] JSON-извлечение из PDF: {extraction.get('extraction_status')} "
@@ -981,12 +1161,26 @@ async def score_with_documents(
             rx_post = _regex_scoring_features_from_text(combined_text_llm)
             if rx_post:
                 _merge_extracted_doc_features(
-                    feature_dict, rx_post, source_tag="REGEX_POST", force=True
+                    feature_dict,
+                    rx_post,
+                    source_tag="REGEX_POST",
+                    force=True,
+                    feature_sources=feature_sources,
                 )
                 print(f"[docs] REGEX_POST (приоритет над LLM): {rx_post}")
 
-    _impute_missing_model_features(feature_dict, tag="IMPUTE_DOC")
-    result = engine.score_farmer(feature_dict, llm_context=llm_summary)
+    _derive_context_features(feature_dict)
+    imputed = _impute_missing_model_features(feature_dict, tag="IMPUTE_DOC")
+    _apply_imputed_sources(feature_sources, imputed)
+    result = engine.score_farmer(
+        feature_dict,
+        llm_context=llm_summary,
+        imputed_fields=imputed,
+        feature_sources=feature_sources,
+    )
+    display_features = _raw_features_for_display(
+        feature_dict, imputed, model_feature_names=engine.feature_names
+    )
     base_score = result["score"]
 
     llm_expert_opinion = None
@@ -1074,7 +1268,9 @@ async def score_with_documents(
         "top_negative_factors":   result["top_negative_factors"],
         "all_shap_values":        result["all_shap_values"],
         "shap_base_value":        result.get("shap_base_value"),
-        "raw_features_used":      result.get("raw_features_used", {}),
+        "raw_features_used":      display_features,
+        "imputed_features":     imputed,
+        "feature_sources":      feature_sources,
 
         "compliance": compliance_report,
         "llm_expert_opinion": llm_expert_opinion,  # только объяснение
